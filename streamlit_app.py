@@ -7,9 +7,6 @@ import matplotlib.patches as patches
 st.set_page_config(page_title="LEC Manager", page_icon="⚡", layout="wide")
 
 # --- SIMULIERTE DATENBANK (Backend) ---
-# Hier werden später die Daten aus Google Sheets geladen.
-# Aktuell halten wir sie im Speicher, damit die App sofort funktioniert.
-
 if 'db_projects' not in st.session_state:
     st.session_state.db_projects = {
         "P-001": {"kunde": "Müller", "ort": "Friedrichshafen", "status": "In Planung", "created": "2025-01-08"},
@@ -17,8 +14,6 @@ if 'db_projects' not in st.session_state:
     }
 
 if 'db_rooms' not in st.session_state:
-    # Struktur: ProjektID -> Liste der Räume
-    # Beispiel: P-001 hat Wohnzimmer und Küche
     st.session_state.db_rooms = {
         "P-001": [
             {"name": "Wohnzimmer", "l": 5.0, "b": 4.0, "x": 0, "y": 0, "etage": "EG"},
@@ -32,7 +27,7 @@ if 'db_material' not in st.session_state:
 if 'current_project_id' not in st.session_state:
     st.session_state.current_project_id = None
 
-# --- KATALOG (Simuliert) ---
+# --- KATALOG ---
 PRODUKT_KATALOG = {
     "Steuerung": [
         {"name": "Shelly Plus 2PM", "preis": 29.90},
@@ -51,55 +46,60 @@ PRODUKT_KATALOG = {
     ]
 }
 
-# --- FUNKTION: GRUNDRISS ZEICHNEN ---
+# --- FUNKTION: GRUNDRISS ZEICHNEN (MIT BEMAßUNG) ---
 def plot_floorplan(rooms):
     if not rooms:
         return None
     
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig, ax = plt.subplots(figsize=(10, 7)) # Etwas größer
     
-    # Automatische Skalierung der Achsen berechnen
     max_x = 0
     max_y = 0
 
     for room in rooms:
-        # Rechteck zeichnen
+        # 1. Rechteck zeichnen
         rect = patches.Rectangle((room['x'], room['y']), room['l'], room['b'], 
                                  linewidth=2, edgecolor='#1f77b4', facecolor='#e3f2fd', alpha=0.9)
         ax.add_patch(rect)
         
-        # Text Label (Raumname + m²)
+        # Mittelpunkt berechnen
         cx = room['x'] + room['l']/2
         cy = room['y'] + room['b']/2
         
-        # Schriftgröße an Raumgröße anpassen (einfache Logik)
-        fontsize = 8 if room['l'] < 2 or room['b'] < 2 else 10
-        
-        ax.text(cx, cy, f"{room['name']}\n{room['l']*room['b']:.1f}m²", 
-                ha='center', va='center', fontsize=fontsize, color='#0d47a1', fontweight='bold')
+        # 2. Raum-Label (Mitte)
+        label_text = f"{room['name']}\n({room['l']*room['b']:.1f}m²)"
+        ax.text(cx, cy, label_text, ha='center', va='center', fontsize=10, fontweight='bold', color='#0d47a1')
 
-        # Maxima für Plot-Grenzen aktualisieren
+        # 3. Bemaßung X-Achse (Länge) - Unten mittig im Raum
+        ax.text(cx, room['y'] + 0.3, f"{room['l']}m", 
+                ha='center', va='bottom', fontsize=8, color='black', style='italic')
+
+        # 4. Bemaßung Y-Achse (Breite) - Links mittig im Raum (gedreht)
+        ax.text(room['x'] + 0.3, cy, f"{room['b']}m", 
+                ha='left', va='center', rotation=90, fontsize=8, color='black', style='italic')
+
+        # Maxima für Plot-Grenzen
         max_x = max(max_x, room['x'] + room['l'])
         max_y = max(max_y, room['y'] + room['b'])
 
-    # Plot Grenzen setzen (mit etwas Rand)
+    # Plot Grenzen setzen
     ax.set_xlim(-1, max_x + 2) 
     ax.set_ylim(-1, max_y + 2)
     ax.set_aspect('equal')
+    
+    # Raster und Achsenbeschriftung
     ax.grid(True, linestyle=':', alpha=0.6)
-    ax.set_title("Schematischer Grundriss", fontsize=14)
-    ax.set_xlabel("Meter")
-    ax.set_ylabel("Meter")
+    ax.set_title(f"Grundriss Übersicht (Längenangaben innenliegend)", fontsize=14)
+    ax.set_xlabel("Länge (Meter) ->")
+    ax.set_ylabel("Breite (Meter) ->")
     
     return fig
 
-# --- SIDEBAR: NAVIGATION ---
+# --- SIDEBAR ---
 st.sidebar.title("LEC Manager")
 
-# Projekt Auswahl Logik
 project_options = ["Neues Projekt"] + list(st.session_state.db_projects.keys())
 
-# Formatierung für Dropdown (zeigt Kunde statt ID)
 def format_func(option):
     if option == "Neues Projekt": return option
     p = st.session_state.db_projects[option]
@@ -112,153 +112,106 @@ if selection == "Neues Projekt":
     st.sidebar.subheader("Neuanlage")
     new_kunde = st.sidebar.text_input("Kunde")
     new_ort = st.sidebar.text_input("Ort")
-    
     if st.sidebar.button("Projekt erstellen", type="primary"):
-        if new_kunde and new_ort:
+        if new_kunde:
             new_id = f"P-{len(st.session_state.db_projects)+1:03d}"
             st.session_state.db_projects[new_id] = {"kunde": new_kunde, "ort": new_ort, "status": "Neu", "created": "Heute"}
-            st.session_state.db_rooms[new_id] = [] # Leere Raumliste für neues Projekt
+            st.session_state.db_rooms[new_id] = []
             st.success(f"Projekt {new_id} erstellt!")
             st.rerun()
-        else:
-            st.sidebar.error("Bitte Kunde und Ort angeben.")
 else:
     st.session_state.current_project_id = selection
 
-# --- HAUPTBEREICH (MAIN) ---
+# --- MAIN ---
 if st.session_state.current_project_id:
     curr_id = st.session_state.current_project_id
     proj_data = st.session_state.db_projects[curr_id]
     
     st.title(f"Projekt: {proj_data['kunde']}")
-    st.caption(f"ID: {curr_id} | Ort: {proj_data['ort']} | Status: {proj_data['status']}")
+    st.caption(f"ID: {curr_id} | Ort: {proj_data['ort']}")
     
-    # TABS FÜR WORKFLOW
     tab1, tab2, tab3 = st.tabs(["🏗️ Gebäude & Räume", "📦 Material & Mengen", "📄 Dokumentation"])
     
-    # --- TAB 1: GEBÄUDE STRUKTUR ---
+    # --- TAB 1: RÄUME ---
     with tab1:
         col_input, col_grafik = st.columns([1, 2])
         
         with col_input:
             st.subheader("Raum definieren")
             with st.form("room_form"):
-                r_name = st.text_input("Raumbezeichnung", "Büro")
+                r_name = st.text_input("Bezeichnung", "Zimmer")
                 r_etage = st.selectbox("Etage", ["KG", "EG", "OG1", "OG2", "DG"])
                 
                 c1, c2 = st.columns(2)
-                r_l = c1.number_input("Länge (m)", 0.0, 50.0, 4.0)
-                r_b = c2.number_input("Breite (m)", 0.0, 50.0, 3.5)
+                r_l = c1.number_input("Länge (X-Achse)", 0.0, 50.0, 4.0)
+                r_b = c2.number_input("Breite (Y-Achse)", 0.0, 50.0, 3.5)
                 
-                st.markdown("**Position im Plan (X/Y)**")
+                st.markdown("**Position (Startpunkt)**")
                 c3, c4 = st.columns(2)
-                r_x = c3.number_input("X-Pos", 0.0, 100.0, 0.0, step=1.0)
-                r_y = c4.number_input("Y-Pos", 0.0, 100.0, 0.0, step=1.0)
+                r_x = c3.number_input("X Start", 0.0, 100.0, 0.0, step=0.5)
+                r_y = c4.number_input("Y Start", 0.0, 100.0, 0.0, step=0.5)
                 
-                submitted = st.form_submit_button("Raum hinzufügen")
-                
-                if submitted:
+                if st.form_submit_button("Hinzufügen"):
                     new_room = {"name": r_name, "l": r_l, "b": r_b, "x": r_x, "y": r_y, "etage": r_etage}
-                    # Sicherstellen, dass die Liste existiert
-                    if curr_id not in st.session_state.db_rooms:
-                        st.session_state.db_rooms[curr_id] = []
-                    
+                    if curr_id not in st.session_state.db_rooms: st.session_state.db_rooms[curr_id] = []
                     st.session_state.db_rooms[curr_id].append(new_room)
-                    st.success("Gespeichert")
                     st.rerun()
                 
-            st.divider()
-            st.markdown("##### Raumliste")
-            if curr_id in st.session_state.db_rooms:
-                for idx, r in enumerate(st.session_state.db_rooms[curr_id]):
-                    st.text(f"{idx+1}. {r['name']} ({r['etage']}): {r['l']}x{r['b']}m")
+            st.markdown("---")
+            # Liste mit Lösch-Option (simuliert)
+            if curr_id in st.session_state.db_rooms and st.session_state.db_rooms[curr_id]:
+                if st.button("Letzten Raum löschen"):
+                    st.session_state.db_rooms[curr_id].pop()
+                    st.rerun()
 
         with col_grafik:
-            st.subheader("Grundriss Visualisierung")
             rooms = st.session_state.db_rooms.get(curr_id, [])
-            
             if rooms:
-                # Filteroptionen
                 all_etagen = list(set([r['etage'] for r in rooms]))
-                filter_etage = st.radio("Etage anzeigen", ["Alle"] + sorted(all_etagen), horizontal=True)
+                filter_etage = st.radio("Ansicht Etage:", ["Alle"] + sorted(all_etagen), horizontal=True)
                 
                 rooms_to_plot = rooms if filter_etage == "Alle" else [r for r in rooms if r['etage'] == filter_etage]
-                
                 fig = plot_floorplan(rooms_to_plot)
-                if fig:
-                    st.pyplot(fig)
+                st.pyplot(fig)
             else:
-                st.info("Noch keine Räume definiert. Starten Sie links.")
+                st.info("Starten Sie links mit der Dateneingabe.")
 
     # --- TAB 2: MATERIAL ---
     with tab2:
-        st.subheader("Massenermittlung")
-        
-        # Prüfen ob Räume da sind
+        st.subheader("Material Erfassung")
         my_rooms = [r['name'] for r in st.session_state.db_rooms.get(curr_id, [])]
         
         if not my_rooms:
-            st.warning("⚠️ Bitte erst Räume in Tab 1 anlegen!")
+            st.warning("Erst Räume anlegen!")
         else:
-            col_mat1, col_mat2, col_mat3 = st.columns([1, 1, 1])
+            c_room, c_cat, c_item = st.columns(3)
+            with c_room: target_room = st.selectbox("Raum", my_rooms)
+            with c_cat: cat = st.selectbox("Kategorie", list(PRODUKT_KATALOG.keys()))
+            with c_item: item_name = st.selectbox("Artikel", [p['name'] for p in PRODUKT_KATALOG[cat]])
             
-            with col_mat1:
-                target_room = st.selectbox("Raum wählen", my_rooms)
-            with col_mat2:
-                cat = st.selectbox("Gewerk", list(PRODUKT_KATALOG.keys()))
-            with col_mat3:
-                # Dynamische Artikelliste
-                item_name = st.selectbox("Artikel", [p['name'] for p in PRODUKT_KATALOG[cat]])
+            c_qty, c_add = st.columns([1, 1])
+            qty = c_qty.number_input("Menge", 1, 100, 1)
             
-            col_qty, col_btn = st.columns([1, 1])
-            with col_qty:
-                amount = st.number_input("Menge", 1, 500, 1)
-            with col_btn:
-                st.write("") # Spacer
-                st.write("") # Spacer
-                if st.button("Hinzufügen", type="primary", use_container_width=True):
-                    # Preis suchen
-                    price = next(p['preis'] for p in PRODUKT_KATALOG[cat] if p['name'] == item_name)
-                    st.session_state.db_material.append({
-                        "Projekt": curr_id,
-                        "Raum": target_room,
-                        "Artikel": item_name,
-                        "Menge": amount,
-                        "Preis": price
-                    })
-                    st.success("Gebucht!")
+            if c_add.button("Hinzufügen", type="primary", use_container_width=True):
+                price = next(p['preis'] for p in PRODUKT_KATALOG[cat] if p['name'] == item_name)
+                st.session_state.db_material.append({
+                    "Projekt": curr_id, "Raum": target_room, 
+                    "Artikel": item_name, "Menge": qty, "Preis": price
+                })
+                st.success("OK")
             
-            st.divider()
-            
-            # Tabelle zeigen (nur für dieses Projekt)
+            # Auswertung
             proj_mat = [m for m in st.session_state.db_material if m['Projekt'] == curr_id]
-            
             if proj_mat:
                 df = pd.DataFrame(proj_mat)
                 df['Gesamt'] = df['Menge'] * df['Preis']
-                
-                # Schöne Tabelle
-                st.dataframe(
-                    df[["Raum", "Artikel", "Menge", "Preis", "Gesamt"]], 
-                    use_container_width=True,
-                    column_config={
-                        "Preis": st.column_config.NumberColumn(format="%.2f €"),
-                        "Gesamt": st.column_config.NumberColumn(format="%.2f €")
-                    }
-                )
-                
-                # Summen
-                total = df['Gesamt'].sum()
-                st.metric("Projekt Summe (Netto)", f"{total:.2f} €")
-            else:
-                st.info("Noch kein Material erfasst.")
+                st.dataframe(df[["Raum", "Artikel", "Menge", "Gesamt"]], use_container_width=True)
+                st.metric("Total", f"{df['Gesamt'].sum():.2f} €")
 
-    # --- TAB 3: DOKUMENTATION ---
+    # --- TAB 3: DOKU ---
     with tab3:
-        st.write("Hier entsteht der PDF Export und Rechnungsdruck.")
-        st.info("Feature in Entwicklung: PDF Generierung mit ReportLab")
+        st.info("Hier kommt später der PDF Export hin.")
 
 else:
-    # Begrüßungsbildschirm wenn kein Projekt gewählt
-    st.title("Willkommen bei LEC Manager ⚡")
-    st.info("Bitte wählen Sie links ein Projekt aus oder erstellen Sie ein neues.")
+    st.title("LEC Manager")
+    st.info("Bitte Projekt wählen.")
