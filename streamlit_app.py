@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-import graphviz
+import random
 
 # --- KONFIGURATION ---
 st.set_page_config(page_title="LEC Manager", page_icon="⚡", layout="wide")
@@ -27,103 +27,94 @@ if 'db_material' not in st.session_state:
 if 'current_project_id' not in st.session_state:
     st.session_state.current_project_id = None
 
-# --- KATALOG & SCHEMATA DATENBANK ---
+# --- KATALOG MIT PDF LINKS ---
+# Hier hinterlegen wir die Links zu den Datenblättern (Google Drive oder Hersteller)
 PRODUKT_KATALOG = {
     "Steuerung": [
-        {"name": "Shelly Plus 2PM", "preis": 29.90, "typ": "Rolladen"},
-        {"name": "Shelly Dimmer 2", "preis": 32.50, "typ": "Licht"},
-        {"name": "Shelly i4", "preis": 18.90, "typ": "Taster"},
+        {"name": "Shelly Plus 2PM", "preis": 29.90, "pdf": "https://kb.shelly.cloud/knowledge-base/shelly-plus-2pm"},
+        {"name": "Shelly Dimmer 2", "preis": 32.50, "pdf": "https://kb.shelly.cloud/knowledge-base/shelly-dimmer-2"},
+        {"name": "Shelly i4", "preis": 18.90, "pdf": "https://kb.shelly.cloud/knowledge-base/shelly-plus-i4"},
     ],
     "Installation": [
-        {"name": "Steckdose Gira E2", "preis": 8.50, "typ": "Power"},
-        {"name": "Schalter Gira E2", "preis": 12.00, "typ": "Switch"},
+        {"name": "Steckdose Gira E2", "preis": 8.50, "pdf": "https://partner.gira.de/data3/01881710.pdf"},
+        {"name": "Schalter Gira E2", "preis": 12.00, "pdf": "https://partner.gira.de/data3/01061710.pdf"},
+        {"name": "NYM-J 3x1.5 (100m)", "preis": 65.00, "pdf": "https://www.lappkabel.de/"},
     ]
 }
 
-# --- FUNKTION: GRUNDRISS PLOTTEN ---
-def plot_floorplan(rooms, active_room_idx=None):
+# --- FUNKTION: GRUNDRISS MIT GERÄTEN PLOTTEN ---
+def plot_installation_map(rooms, materials, active_material_idx=None):
     if not rooms: return None
+    
     fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # 1. Räume zeichnen (Basis-Layer)
+    room_centers = {}
     max_x, max_y = 0, 0
-
-    for idx, room in enumerate(rooms):
-        is_active = (idx == active_room_idx)
-        face_col = '#ffcc80' if is_active else '#e3f2fd'
-        edge_col = '#e65100' if is_active else '#1f77b4'
-        lw = 3 if is_active else 2
-        z_order = 10 if is_active else 1
-        
+    
+    for room in rooms:
+        # Raum-Rechteck
         rect = patches.Rectangle((room['x'], room['y']), room['l'], room['b'], 
-                                 linewidth=lw, edgecolor=edge_col, facecolor=face_col, alpha=0.9, zorder=z_order)
+                                 linewidth=2, edgecolor='#90a4ae', facecolor='#eceff1', alpha=0.5, zorder=1)
         ax.add_patch(rect)
         
+        # Mittelpunkt speichern für Geräte-Verteilung
         cx, cy = room['x'] + room['l']/2, room['y'] + room['b']/2
-        label = f"{room['name']}\n{room['l']*room['b']:.1f}m²"
-        font_weight = 'bold' if is_active else 'normal'
-        ax.text(cx, cy, label, ha='center', va='center', fontsize=9, fontweight=font_weight, zorder=z_order+1)
+        room_centers[room['name']] = (cx, cy)
         
-        if room['l'] > 1.0: ax.text(cx, room['y'] + 0.2, f"{room['l']}m", ha='center', va='bottom', fontsize=8, zorder=z_order+1)
-        if room['b'] > 1.0: ax.text(room['x'] + 0.2, cy, f"{room['b']}m", ha='left', va='center', rotation=90, fontsize=8, zorder=z_order+1)
-
+        # Raumname
+        ax.text(room['x']+0.2, room['y']+0.2, room['name'], fontsize=8, color='#546e7a', zorder=2, fontweight='bold')
+        
+        # Grenzen für Plot berechnen
         max_x = max(max_x, room['x'] + room['l'])
         max_y = max(max_y, room['y'] + room['b'])
 
+    # 2. Geräte zeichnen (Device-Layer)
+    # Wir verteilen die Geräte leicht zufällig um die Raummitte (Jitter), damit sie nicht übereinander liegen.
+    random.seed(42) # Fixer Seed, damit die Punkte beim Neuladen nicht springen
+
+    for idx, mat in enumerate(materials):
+        r_name = mat['Raum']
+        if r_name in room_centers:
+            cx, cy = room_centers[r_name]
+            
+            # Zufälliger Offset (Simulation der Position im Raum)
+            ox = random.uniform(-1.0, 1.0)
+            oy = random.uniform(-1.0, 1.0)
+            px, py = cx + ox, cy + oy
+            
+            # Highlight Logik: Wenn ausgewählt -> ROT und GROSS, sonst BLAU und klein
+            is_active = (idx == active_material_idx)
+            
+            color = '#d50000' if is_active else '#2962ff' 
+            size = 180 if is_active else 60
+            marker = 'P' if "Shelly" in mat['Artikel'] else 'o' # P = Plus (für Smart Home), o = Kreis (Standard)
+            alpha = 1.0 if is_active else 0.7
+            
+            # Punkt zeichnen
+            ax.scatter(px, py, c=color, s=size, marker=marker, zorder=5, edgecolors='white', alpha=alpha)
+            
+            # Label nur zeichnen, wenn aktiv
+            if is_active:
+                ax.text(px, py+0.4, mat['Artikel'], ha='center', fontsize=9, fontweight='bold', color='#d50000', zorder=6,
+                        bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=1))
+
+    # Achsen-Setup
     ax.set_xlim(-1, max(10, max_x + 2)) 
     ax.set_ylim(-1, max(10, max_y + 2))
     ax.set_aspect('equal')
-    ax.grid(True, linestyle=':', alpha=0.5)
+    ax.grid(True, linestyle=':', alpha=0.3)
+    ax.set_title("Installations-Plan (Interaktiv)", fontsize=14)
+    ax.set_xlabel("Meter")
+    ax.set_ylabel("Meter")
+    
     return fig
 
-# --- FUNKTION: LOGIK-SCHEMA GENERIEREN ---
-def get_wiring_diagram(component_name):
-    graph = graphviz.Digraph()
-    graph.attr(rankdir='LR', bgcolor='transparent')
-    
-    # Standard Styles
-    graph.attr('node', shape='box', style='rounded,filled', fillcolor='white', fontname='Arial')
-    
-    if "Shelly Plus 2PM" in component_name:
-        graph.node('L', 'L (Phase)', fillcolor='#ffcdd2')
-        graph.node('N', 'N (Neutral)', fillcolor='#bbdefb')
-        graph.node('S1', 'Schalter Auf')
-        graph.node('S2', 'Schalter Ab')
-        graph.node('SH', 'Shelly 2PM', fillcolor='#fff9c4', shape='component')
-        graph.node('M', 'Rolladen Motor', fillcolor='#e0e0e0')
-        
-        graph.edge('L', 'SH', label='L')
-        graph.edge('N', 'SH', label='N')
-        graph.edge('L', 'S1')
-        graph.edge('L', 'S2')
-        graph.edge('S1', 'SH', label='SW1')
-        graph.edge('S2', 'SH', label='SW2')
-        graph.edge('SH', 'M', label='O1 (Auf)')
-        graph.edge('SH', 'M', label='O2 (Ab)')
-        graph.edge('N', 'M')
-        
-    elif "Shelly Dimmer" in component_name:
-        graph.node('L', 'L (Phase)', fillcolor='#ffcdd2')
-        graph.node('N', 'N (Neutral)', fillcolor='#bbdefb')
-        graph.node('T', 'Taster', shape='circle')
-        graph.node('SH', 'Shelly Dimmer 2', fillcolor='#fff9c4', shape='component')
-        graph.node('La', 'Lampe (Dimmbar)', shape='circle', fillcolor='#fff176')
-        
-        graph.edge('L', 'SH', label='L')
-        graph.edge('N', 'SH', label='N')
-        graph.edge('L', 'T')
-        graph.edge('T', 'SH', label='SW1')
-        graph.edge('SH', 'La', label='O')
-        graph.edge('N', 'La')
-        
-    else:
-        graph.node('Info', f'Kein Schema für {component_name} hinterlegt.')
-        
-    return graph
-
-# --- MAIN APP ---
+# --- SIDEBAR: PROJEKTWAHL ---
 st.sidebar.title("LEC Manager")
 
-# Projekt Auswahl
 project_options = ["Neues Projekt"] + list(st.session_state.db_projects.keys())
+
 def format_func(option):
     if option == "Neues Projekt": return option
     p = st.session_state.db_projects[option]
@@ -132,6 +123,7 @@ def format_func(option):
 selection = st.sidebar.selectbox("Projekt wählen", project_options, format_func=format_func)
 
 if selection == "Neues Projekt":
+    st.sidebar.divider()
     st.sidebar.subheader("Neuanlage")
     new_kunde = st.sidebar.text_input("Kunde")
     new_ort = st.sidebar.text_input("Ort")
@@ -139,112 +131,123 @@ if selection == "Neues Projekt":
         new_id = f"P-{len(st.session_state.db_projects)+1:03d}"
         st.session_state.db_projects[new_id] = {"kunde": new_kunde, "ort": new_ort, "status": "Neu", "created": "Heute"}
         st.session_state.db_rooms[new_id] = []
+        st.success("Erstellt!")
         st.rerun()
 else:
     st.session_state.current_project_id = selection
 
+# --- HAUPTBEREICH ---
 if st.session_state.current_project_id:
     curr_id = st.session_state.current_project_id
     proj_data = st.session_state.db_projects[curr_id]
     
     st.title(f"Projekt: {proj_data['kunde']}")
+    st.caption(f"ID: {curr_id} | Ort: {proj_data['ort']}")
     
-    # TABS
-    tab1, tab2, tab3 = st.tabs(["🏗️ Editor", "📦 Material", "🔌 Schemata & Wiki"])
+    # TABS DEFINITION
+    tab1, tab2, tab3 = st.tabs(["🏗️ Editor", "📦 Material", "📍 Installation (Live)"])
     
-    # --- TAB 1: EDITOR ---
+    # --- TAB 1: EDITOR (Räume anlegen & schieben) ---
     with tab1:
-        col_list, col_visual = st.columns([1, 2])
+        col_edit, col_view = st.columns([1, 2])
         if curr_id not in st.session_state.db_rooms: st.session_state.db_rooms[curr_id] = []
         rooms = st.session_state.db_rooms[curr_id]
         
-        with col_list:
-            with st.expander("➕ Neuer Raum"):
-                with st.form("new_room_form"):
+        with col_edit:
+            with st.expander("➕ Raum hinzufügen", expanded=False):
+                with st.form("new_room"):
                     n_name = st.text_input("Name", "Zimmer")
                     c1, c2 = st.columns(2)
                     n_l = c1.number_input("Länge", 4.0)
-                    n_b = c2.number_input("Breite", 3.5)
-                    n_etage = st.selectbox("Etage", ["KG", "EG", "OG1", "OG2"])
-                    if st.form_submit_button("Anlegen"):
-                        st.session_state.db_rooms[curr_id].append({"name": n_name, "l": n_l, "b": n_b, "x": 0.0, "y": 0.0, "etage": n_etage})
+                    n_b = c2.number_input("Breite", 3.0)
+                    if st.form_submit_button("Speichern"):
+                        st.session_state.db_rooms[curr_id].append({"name": n_name, "l": n_l, "b": n_b, "x": 0.0, "y": 0.0, "etage": "EG"})
                         st.rerun()
-
+            
             if rooms:
                 st.divider()
-                st.markdown("**Positionieren:**")
-                room_labels = [f"{r['name']}" for r in rooms]
-                selected_idx = st.radio("Raum wählen", range(len(rooms)), format_func=lambda x: room_labels[x])
-                active_room = rooms[selected_idx]
+                st.write("**Räume verschieben:**")
+                r_labels = [r['name'] for r in rooms]
+                idx = st.radio("Raum wählen", range(len(rooms)), format_func=lambda x: r_labels[x])
                 
-                new_x = st.slider("X", -5.0, 25.0, float(active_room['x']), 0.25, key=f"sx_{curr_id}")
-                new_y = st.slider("Y", -5.0, 25.0, float(active_room['y']), 0.25, key=f"sy_{curr_id}")
-                st.session_state.db_rooms[curr_id][selected_idx]['x'] = new_x
-                st.session_state.db_rooms[curr_id][selected_idx]['y'] = new_y
+                cur = rooms[idx]
+                nx = st.slider("X-Pos", -5.0, 25.0, float(cur['x']), 0.25, key=f"sx_{curr_id}")
+                ny = st.slider("Y-Pos", -5.0, 25.0, float(cur['y']), 0.25, key=f"sy_{curr_id}")
+                st.session_state.db_rooms[curr_id][idx]['x'] = nx
+                st.session_state.db_rooms[curr_id][idx]['y'] = ny
             else:
-                selected_idx = None
+                idx = None
 
-        with col_visual:
-            st.pyplot(plot_floorplan(rooms, active_room_idx=selected_idx))
+        with col_view:
+            # Einfacher Plot ohne Geräte für den Editor
+            # Wir nutzen die gleiche Funktion, übergeben aber leere Materialliste
+            fig = plot_installation_map(rooms, [], active_material_idx=None)
+            if fig: st.pyplot(fig)
 
-    # --- TAB 2: MATERIAL ---
+    # --- TAB 2: MATERIAL (Erfassung) ---
     with tab2:
         my_rooms = [r['name'] for r in st.session_state.db_rooms.get(curr_id, [])]
         if my_rooms:
             c1, c2, c3 = st.columns(3)
             r = c1.selectbox("Raum", my_rooms)
-            k = c2.selectbox("Kat", list(PRODUKT_KATALOG.keys()))
-            i = c3.selectbox("Item", [p['name'] for p in PRODUKT_KATALOG[k]])
-            qty = st.number_input("Menge", 1, 100, 1)
-            if st.button("Add", type="primary", use_container_width=True):
-                p = next(p['preis'] for p in PRODUKT_KATALOG[k] if p['name'] == i)
-                st.session_state.db_material.append({"Projekt": curr_id, "Raum": r, "Artikel": i, "Menge": qty, "Preis": p})
+            k = c2.selectbox("Kategorie", list(PRODUKT_KATALOG.keys()))
+            i = c3.selectbox("Artikel", [p['name'] for p in PRODUKT_KATALOG[k]])
             
+            if st.button("Hinzufügen", type="primary"):
+                p_data = next(p for p in PRODUKT_KATALOG[k] if p['name'] == i)
+                st.session_state.db_material.append({
+                    "Projekt": curr_id, "Raum": r, "Artikel": i, 
+                    "Menge": 1, "Preis": p_data['preis'], "PDF": p_data['pdf']
+                })
+                st.success("Gespeichert")
+            
+            # Liste anzeigen
             proj_mat = [m for m in st.session_state.db_material if m['Projekt'] == curr_id]
             if proj_mat:
-                df = pd.DataFrame(proj_mat)
-                df['Gesamt'] = df['Menge'] * df['Preis']
-                st.dataframe(df[["Raum", "Artikel", "Menge", "Gesamt"]], use_container_width=True)
-                st.metric("Total", f"{df['Gesamt'].sum():.2f} €")
+                st.dataframe(pd.DataFrame(proj_mat)[["Raum", "Artikel", "Preis"]], use_container_width=True)
         else:
-            st.warning("Erst Räume anlegen.")
+            st.warning("Bitte erst Räume im Editor anlegen.")
 
-    # --- TAB 3: SCHEMATA ---
+    # --- TAB 3: INSTALLATION & DOKU (Das neue Feature) ---
     with tab3:
-        st.subheader("Technisches Handbuch & Wiring")
-        st.caption("Wählen Sie eine Komponente, um das Anschlussschema zu sehen.")
+        st.subheader("Geräte-Locator & Dokumentation")
         
-        # 1. Auswahl
-        col_select, col_view = st.columns([1, 2])
+        col_map, col_list = st.columns([2, 1])
         
-        with col_select:
-            # Wir nehmen alle Komponenten aus der Steuerung
-            comps = [p['name'] for p in PRODUKT_KATALOG["Steuerung"]]
-            selected_comp = st.radio("Komponente wählen", comps)
-            
-            st.info("💡 Tipp: Diese Schemata werden automatisch generiert.")
+        proj_mat = [m for m in st.session_state.db_material if m['Projekt'] == curr_id]
+        rooms = st.session_state.db_rooms.get(curr_id, [])
         
-        with col_view:
-            st.markdown(f"### Anschlussplan: {selected_comp}")
-            
-            # Diagramm holen
-            diag = get_wiring_diagram(selected_comp)
-            st.graphviz_chart(diag)
-            
-            # Hier könnten wir später echte Bilder einblenden
-            # st.image("https://hersteller-website.com/schema.jpg")
-            
-            with st.expander("Technische Notizen anzeigen"):
-                if "Shelly Plus 2PM" in selected_comp:
-                    st.write("""
-                    * **Kalibrierung:** Nach Einbau zwingend Rolladen-Kalibrierung via App durchführen.
-                    * **Last:** Max 10A pro Kanal, aber bei induktiver Last (Motoren) RC-Snubber empfohlen.
-                    """)
-                elif "Dimmer" in selected_comp:
-                    st.write("""
-                    * **Bypass:** Bei < 10W Last (LED) wird ein Bypass benötigt, falls ohne N-Leiter gearbeitet wird.
-                    * **Taster:** Funktioniert mit Schalter und Taster (in App konfigurieren).
-                    """)
+        active_idx = None
+        
+        with col_list:
+            st.markdown("### Komponenten Liste")
+            if proj_mat:
+                # Interaktive Liste via Radio Buttons
+                mat_labels = [f"{m['Artikel']} ({m['Raum']})" for m in proj_mat]
+                sel_label = st.radio("Wählen zum Anzeigen:", mat_labels)
+                
+                # Index finden
+                active_idx = mat_labels.index(sel_label)
+                active_item = proj_mat[active_idx]
+                
+                st.divider()
+                st.markdown(f"**Gewählt:** {active_item['Artikel']}")
+                
+                # PDF BUTTON
+                if active_item.get('PDF'):
+                    st.link_button(f"📄 Datenblatt öffnen", active_item['PDF'], type="primary")
+                else:
+                    st.info("Kein PDF hinterlegt.")
+            else:
+                st.info("Keine Komponenten verbaut.")
+
+        with col_map:
+            if rooms:
+                # Plot mit Highlight des aktiven Geräts
+                fig = plot_installation_map(rooms, proj_mat, active_material_idx=active_idx)
+                st.pyplot(fig)
+            else:
+                st.warning("Keine Räume.")
 
 else:
-    st.info("Bitte Projekt wählen.")
+    st.info("Bitte wählen Sie links ein Projekt.")
