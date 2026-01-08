@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import graphviz
 
 # --- KONFIGURATION ---
 st.set_page_config(page_title="LEC Manager", page_icon="⚡", layout="wide")
@@ -26,84 +27,103 @@ if 'db_material' not in st.session_state:
 if 'current_project_id' not in st.session_state:
     st.session_state.current_project_id = None
 
-# --- KATALOG ---
+# --- KATALOG & SCHEMATA DATENBANK ---
 PRODUKT_KATALOG = {
     "Steuerung": [
-        {"name": "Shelly Plus 2PM", "preis": 29.90},
-        {"name": "Shelly Dimmer 2", "preis": 32.50},
-        {"name": "Shelly i4", "preis": 18.90},
+        {"name": "Shelly Plus 2PM", "preis": 29.90, "typ": "Rolladen"},
+        {"name": "Shelly Dimmer 2", "preis": 32.50, "typ": "Licht"},
+        {"name": "Shelly i4", "preis": 18.90, "typ": "Taster"},
     ],
     "Installation": [
-        {"name": "Steckdose Gira E2", "preis": 8.50},
-        {"name": "Schalter Gira E2", "preis": 12.00},
-        {"name": "NYM-J 3x1.5 (100m)", "preis": 65.00},
-        {"name": "Keystone Modul", "preis": 6.50},
-        {"name": "Datendose 2-fach", "preis": 12.00},
-    ],
-    "Verteiler": [
-        {"name": "FI-Schalter 40A", "preis": 35.00},
-        {"name": "LS-Schalter B16", "preis": 2.80},
-        {"name": "Reihenklemme Phoenix", "preis": 1.90},
+        {"name": "Steckdose Gira E2", "preis": 8.50, "typ": "Power"},
+        {"name": "Schalter Gira E2", "preis": 12.00, "typ": "Switch"},
     ]
 }
 
 # --- FUNKTION: GRUNDRISS PLOTTEN ---
 def plot_floorplan(rooms, active_room_idx=None):
     if not rooms: return None
-    
-    # Figure Setup
     fig, ax = plt.subplots(figsize=(10, 6))
-    
-    max_x = 0
-    max_y = 0
+    max_x, max_y = 0, 0
 
     for idx, room in enumerate(rooms):
-        # Logic: Aktiver Raum (der gerade bearbeitet wird) ist ORANGE
         is_active = (idx == active_room_idx)
-        face_col = '#ffcc80' if is_active else '#e3f2fd' # Orange vs Blau
+        face_col = '#ffcc80' if is_active else '#e3f2fd'
         edge_col = '#e65100' if is_active else '#1f77b4'
         lw = 3 if is_active else 2
         z_order = 10 if is_active else 1
         
-        # Rechteck zeichnen
         rect = patches.Rectangle((room['x'], room['y']), room['l'], room['b'], 
                                  linewidth=lw, edgecolor=edge_col, facecolor=face_col, alpha=0.9, zorder=z_order)
         ax.add_patch(rect)
         
-        # Text Label (Mitte des Raums)
-        cx = room['x'] + room['l']/2
-        cy = room['y'] + room['b']/2
-        
+        cx, cy = room['x'] + room['l']/2, room['y'] + room['b']/2
         label = f"{room['name']}\n{room['l']*room['b']:.1f}m²"
         font_weight = 'bold' if is_active else 'normal'
         ax.text(cx, cy, label, ha='center', va='center', fontsize=9, fontweight=font_weight, zorder=z_order+1)
         
-        # Bemaßung (Länge unten, Breite links) - Nur wenn Raum groß genug
-        if room['l'] > 1.0:
-            ax.text(cx, room['y'] + 0.2, f"{room['l']}m", ha='center', va='bottom', fontsize=8, zorder=z_order+1)
-        if room['b'] > 1.0:
-            ax.text(room['x'] + 0.2, cy, f"{room['b']}m", ha='left', va='center', rotation=90, fontsize=8, zorder=z_order+1)
+        if room['l'] > 1.0: ax.text(cx, room['y'] + 0.2, f"{room['l']}m", ha='center', va='bottom', fontsize=8, zorder=z_order+1)
+        if room['b'] > 1.0: ax.text(room['x'] + 0.2, cy, f"{room['b']}m", ha='left', va='center', rotation=90, fontsize=8, zorder=z_order+1)
 
-        # Plot Grenzen ermitteln
         max_x = max(max_x, room['x'] + room['l'])
         max_y = max(max_y, room['y'] + room['b'])
 
-    # Achsen konfigurieren
     ax.set_xlim(-1, max(10, max_x + 2)) 
     ax.set_ylim(-1, max(10, max_y + 2))
     ax.set_aspect('equal')
     ax.grid(True, linestyle=':', alpha=0.5)
-    ax.set_title("Grundriss Übersicht (Aktiver Raum hervorgehoben)", fontsize=14)
-    ax.set_xlabel("Meter")
-    ax.set_ylabel("Meter")
-    
     return fig
 
-# --- SIDEBAR: PROJEKTAUSWAHL ---
+# --- FUNKTION: LOGIK-SCHEMA GENERIEREN ---
+def get_wiring_diagram(component_name):
+    graph = graphviz.Digraph()
+    graph.attr(rankdir='LR', bgcolor='transparent')
+    
+    # Standard Styles
+    graph.attr('node', shape='box', style='rounded,filled', fillcolor='white', fontname='Arial')
+    
+    if "Shelly Plus 2PM" in component_name:
+        graph.node('L', 'L (Phase)', fillcolor='#ffcdd2')
+        graph.node('N', 'N (Neutral)', fillcolor='#bbdefb')
+        graph.node('S1', 'Schalter Auf')
+        graph.node('S2', 'Schalter Ab')
+        graph.node('SH', 'Shelly 2PM', fillcolor='#fff9c4', shape='component')
+        graph.node('M', 'Rolladen Motor', fillcolor='#e0e0e0')
+        
+        graph.edge('L', 'SH', label='L')
+        graph.edge('N', 'SH', label='N')
+        graph.edge('L', 'S1')
+        graph.edge('L', 'S2')
+        graph.edge('S1', 'SH', label='SW1')
+        graph.edge('S2', 'SH', label='SW2')
+        graph.edge('SH', 'M', label='O1 (Auf)')
+        graph.edge('SH', 'M', label='O2 (Ab)')
+        graph.edge('N', 'M')
+        
+    elif "Shelly Dimmer" in component_name:
+        graph.node('L', 'L (Phase)', fillcolor='#ffcdd2')
+        graph.node('N', 'N (Neutral)', fillcolor='#bbdefb')
+        graph.node('T', 'Taster', shape='circle')
+        graph.node('SH', 'Shelly Dimmer 2', fillcolor='#fff9c4', shape='component')
+        graph.node('La', 'Lampe (Dimmbar)', shape='circle', fillcolor='#fff176')
+        
+        graph.edge('L', 'SH', label='L')
+        graph.edge('N', 'SH', label='N')
+        graph.edge('L', 'T')
+        graph.edge('T', 'SH', label='SW1')
+        graph.edge('SH', 'La', label='O')
+        graph.edge('N', 'La')
+        
+    else:
+        graph.node('Info', f'Kein Schema für {component_name} hinterlegt.')
+        
+    return graph
+
+# --- MAIN APP ---
 st.sidebar.title("LEC Manager")
 
+# Projekt Auswahl
 project_options = ["Neues Projekt"] + list(st.session_state.db_projects.keys())
-
 def format_func(option):
     if option == "Neues Projekt": return option
     p = st.session_state.db_projects[option]
@@ -112,156 +132,119 @@ def format_func(option):
 selection = st.sidebar.selectbox("Projekt wählen", project_options, format_func=format_func)
 
 if selection == "Neues Projekt":
-    st.sidebar.divider()
     st.sidebar.subheader("Neuanlage")
     new_kunde = st.sidebar.text_input("Kunde")
     new_ort = st.sidebar.text_input("Ort")
     if st.sidebar.button("Projekt erstellen", type="primary"):
-        if new_kunde:
-            new_id = f"P-{len(st.session_state.db_projects)+1:03d}"
-            st.session_state.db_projects[new_id] = {"kunde": new_kunde, "ort": new_ort, "status": "Neu", "created": "Heute"}
-            st.session_state.db_rooms[new_id] = []
-            st.success(f"Projekt {new_id} erstellt!")
-            st.rerun()
+        new_id = f"P-{len(st.session_state.db_projects)+1:03d}"
+        st.session_state.db_projects[new_id] = {"kunde": new_kunde, "ort": new_ort, "status": "Neu", "created": "Heute"}
+        st.session_state.db_rooms[new_id] = []
+        st.rerun()
 else:
     st.session_state.current_project_id = selection
 
-# --- HAUPTBEREICH ---
 if st.session_state.current_project_id:
     curr_id = st.session_state.current_project_id
     proj_data = st.session_state.db_projects[curr_id]
     
     st.title(f"Projekt: {proj_data['kunde']}")
-    st.caption(f"ID: {curr_id} | Ort: {proj_data['ort']}")
     
     # TABS
-    tab1, tab2, tab3 = st.tabs(["🏗️ Editor & Grundriss", "📦 Material & Mengen", "📄 Doku"])
+    tab1, tab2, tab3 = st.tabs(["🏗️ Editor", "📦 Material", "🔌 Schemata & Wiki"])
     
-    # --- TAB 1: VISUELLER EDITOR ---
+    # --- TAB 1: EDITOR ---
     with tab1:
         col_list, col_visual = st.columns([1, 2])
-        
-        # Daten laden
-        if curr_id not in st.session_state.db_rooms:
-            st.session_state.db_rooms[curr_id] = []
+        if curr_id not in st.session_state.db_rooms: st.session_state.db_rooms[curr_id] = []
         rooms = st.session_state.db_rooms[curr_id]
         
         with col_list:
-            # 1. NEUEN RAUM ERSTELLEN
-            with st.expander("➕ Neuen Raum hinzufügen", expanded=False):
+            with st.expander("➕ Neuer Raum"):
                 with st.form("new_room_form"):
-                    n_name = st.text_input("Bezeichnung", "Zimmer")
+                    n_name = st.text_input("Name", "Zimmer")
                     c1, c2 = st.columns(2)
-                    n_l = c1.number_input("Länge", value=4.0, step=0.1)
-                    n_b = c2.number_input("Breite", value=3.5, step=0.1)
-                    n_etage = st.selectbox("Etage", ["KG", "EG", "OG1", "OG2", "DG"])
-                    
-                    if st.form_submit_button("Raum anlegen"):
-                        st.session_state.db_rooms[curr_id].append(
-                            {"name": n_name, "l": n_l, "b": n_b, "x": 0.0, "y": 0.0, "etage": n_etage}
-                        )
+                    n_l = c1.number_input("Länge", 4.0)
+                    n_b = c2.number_input("Breite", 3.5)
+                    n_etage = st.selectbox("Etage", ["KG", "EG", "OG1", "OG2"])
+                    if st.form_submit_button("Anlegen"):
+                        st.session_state.db_rooms[curr_id].append({"name": n_name, "l": n_l, "b": n_b, "x": 0.0, "y": 0.0, "etage": n_etage})
                         st.rerun()
 
-            st.divider()
-            
-            # 2. RÄUME BEARBEITEN (POSITIONIEREN)
-            st.subheader("Raum Positionieren")
-            
             if rooms:
-                # Raumauswahl per Radio Button (dient als "Selektor")
-                room_labels = [f"{r['name']} ({r['etage']})" for r in rooms]
-                selected_idx = st.radio("Welchen Raum verschieben?", range(len(rooms)), format_func=lambda x: room_labels[x])
-                
+                st.divider()
+                st.markdown("**Positionieren:**")
+                room_labels = [f"{r['name']}" for r in rooms]
+                selected_idx = st.radio("Raum wählen", range(len(rooms)), format_func=lambda x: room_labels[x])
                 active_room = rooms[selected_idx]
                 
-                # --- SCHIEBEREGLER MIT 0.25m SCHRITTEN ---
-                st.markdown("##### Verschieben (X / Y)")
-                
-                # Slider X
-                new_x = st.slider(
-                    "X-Achse (Links/Rechts)", 
-                    min_value=-5.0, max_value=25.0, 
-                    value=float(active_room['x']), 
-                    step=0.25,  # <--- HIER IST DIE ÄNDERUNG
-                    key=f"slider_x_{curr_id}" # Key reset bei Projektwechsel
-                )
-                
-                # Slider Y
-                new_y = st.slider(
-                    "Y-Achse (Oben/Unten)", 
-                    min_value=-5.0, max_value=25.0, 
-                    value=float(active_room['y']), 
-                    step=0.25,  # <--- HIER IST DIE ÄNDERUNG
-                    key=f"slider_y_{curr_id}"
-                )
-                
-                # Update Database
+                new_x = st.slider("X", -5.0, 25.0, float(active_room['x']), 0.25, key=f"sx_{curr_id}")
+                new_y = st.slider("Y", -5.0, 25.0, float(active_room['y']), 0.25, key=f"sy_{curr_id}")
                 st.session_state.db_rooms[curr_id][selected_idx]['x'] = new_x
                 st.session_state.db_rooms[curr_id][selected_idx]['y'] = new_y
-                
-                st.info(f"Position: X={new_x}m / Y={new_y}m")
-                
             else:
-                st.warning("Noch keine Räume angelegt.")
                 selected_idx = None
 
         with col_visual:
-            st.subheader("Grundriss Vorschau")
-            # Wir übergeben den Index für das Highlighting
-            fig = plot_floorplan(rooms, active_room_idx=selected_idx)
-            if fig:
-                st.pyplot(fig)
+            st.pyplot(plot_floorplan(rooms, active_room_idx=selected_idx))
 
     # --- TAB 2: MATERIAL ---
     with tab2:
-        st.subheader("Material Erfassung")
-        
         my_rooms = [r['name'] for r in st.session_state.db_rooms.get(curr_id, [])]
-        
-        if not my_rooms:
-            st.warning("⚠️ Bitte legen Sie zuerst Räume im Tab 'Editor' an.")
-        else:
-            # Eingabezeile
-            c_room, c_cat, c_item = st.columns([1, 1, 1])
-            with c_room: target_room = st.selectbox("Raum", my_rooms)
-            with c_cat: cat = st.selectbox("Kategorie", list(PRODUKT_KATALOG.keys()))
-            with c_item: item_name = st.selectbox("Artikel", [p['name'] for p in PRODUKT_KATALOG[cat]])
+        if my_rooms:
+            c1, c2, c3 = st.columns(3)
+            r = c1.selectbox("Raum", my_rooms)
+            k = c2.selectbox("Kat", list(PRODUKT_KATALOG.keys()))
+            i = c3.selectbox("Item", [p['name'] for p in PRODUKT_KATALOG[k]])
+            qty = st.number_input("Menge", 1, 100, 1)
+            if st.button("Add", type="primary", use_container_width=True):
+                p = next(p['preis'] for p in PRODUKT_KATALOG[k] if p['name'] == i)
+                st.session_state.db_material.append({"Projekt": curr_id, "Raum": r, "Artikel": i, "Menge": qty, "Preis": p})
             
-            c_qty, c_add = st.columns([1, 1])
-            with c_qty: qty = st.number_input("Menge", 1, 100, 1)
-            with c_add: 
-                st.write("") # Spacer
-                st.write("") # Spacer
-                if st.button("Hinzufügen", type="primary", use_container_width=True):
-                    price = next(p['preis'] for p in PRODUKT_KATALOG[cat] if p['name'] == item_name)
-                    st.session_state.db_material.append({
-                        "Projekt": curr_id, "Raum": target_room, 
-                        "Artikel": item_name, "Menge": qty, "Preis": price
-                    })
-                    st.success("Gespeichert!")
-
-            st.divider()
-            
-            # Tabelle & Auswertung
             proj_mat = [m for m in st.session_state.db_material if m['Projekt'] == curr_id]
             if proj_mat:
                 df = pd.DataFrame(proj_mat)
                 df['Gesamt'] = df['Menge'] * df['Preis']
-                
-                st.dataframe(
-                    df[["Raum", "Artikel", "Menge", "Preis", "Gesamt"]],
-                    use_container_width=True,
-                    column_config={"Preis": st.column_config.NumberColumn(format="%.2f €"), "Gesamt": st.column_config.NumberColumn(format="%.2f €")}
-                )
-                
-                st.metric("Projekt Summe (Netto)", f"{df['Gesamt'].sum():.2f} €")
-            else:
-                st.info("Noch kein Material für dieses Projekt erfasst.")
+                st.dataframe(df[["Raum", "Artikel", "Menge", "Gesamt"]], use_container_width=True)
+                st.metric("Total", f"{df['Gesamt'].sum():.2f} €")
+        else:
+            st.warning("Erst Räume anlegen.")
 
-    # --- TAB 3: DOKU ---
+    # --- TAB 3: SCHEMATA ---
     with tab3:
-        st.info("Feature in Arbeit: PDF Export und Angebotserstellung.")
+        st.subheader("Technisches Handbuch & Wiring")
+        st.caption("Wählen Sie eine Komponente, um das Anschlussschema zu sehen.")
+        
+        # 1. Auswahl
+        col_select, col_view = st.columns([1, 2])
+        
+        with col_select:
+            # Wir nehmen alle Komponenten aus der Steuerung
+            comps = [p['name'] for p in PRODUKT_KATALOG["Steuerung"]]
+            selected_comp = st.radio("Komponente wählen", comps)
+            
+            st.info("💡 Tipp: Diese Schemata werden automatisch generiert.")
+        
+        with col_view:
+            st.markdown(f"### Anschlussplan: {selected_comp}")
+            
+            # Diagramm holen
+            diag = get_wiring_diagram(selected_comp)
+            st.graphviz_chart(diag)
+            
+            # Hier könnten wir später echte Bilder einblenden
+            # st.image("https://hersteller-website.com/schema.jpg")
+            
+            with st.expander("Technische Notizen anzeigen"):
+                if "Shelly Plus 2PM" in selected_comp:
+                    st.write("""
+                    * **Kalibrierung:** Nach Einbau zwingend Rolladen-Kalibrierung via App durchführen.
+                    * **Last:** Max 10A pro Kanal, aber bei induktiver Last (Motoren) RC-Snubber empfohlen.
+                    """)
+                elif "Dimmer" in selected_comp:
+                    st.write("""
+                    * **Bypass:** Bei < 10W Last (LED) wird ein Bypass benötigt, falls ohne N-Leiter gearbeitet wird.
+                    * **Taster:** Funktioniert mit Schalter und Taster (in App konfigurieren).
+                    """)
 
 else:
-    st.title("LEC Manager")
-    st.info("Bitte wählen Sie links ein Projekt aus.")
+    st.info("Bitte Projekt wählen.")
