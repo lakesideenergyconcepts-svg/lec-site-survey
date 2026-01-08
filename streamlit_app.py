@@ -5,10 +5,10 @@ import matplotlib.patches as patches
 import graphviz
 import random
 
-# --- KONFIGURATION ---
+# --- 1. KONFIGURATION ---
 st.set_page_config(page_title="LEC Manager", page_icon="⚡", layout="wide")
 
-# --- SIMULIERTE DATENBANK (Backend) ---
+# --- 2. SESSION STATE (DATENBANK) ---
 if 'db_projects' not in st.session_state:
     st.session_state.db_projects = {
         "P-001": {"kunde": "Müller", "ort": "Friedrichshafen", "status": "In Planung"},
@@ -25,7 +25,6 @@ if 'db_rooms' not in st.session_state:
 if 'db_material' not in st.session_state:
     st.session_state.db_material = []
 
-# NEU: Strings (Stromkreise) Datenbank
 if 'db_strings' not in st.session_state:
     st.session_state.db_strings = {
         "P-001": [
@@ -37,14 +36,14 @@ if 'db_strings' not in st.session_state:
 if 'current_project_id' not in st.session_state:
     st.session_state.current_project_id = None
 
-# --- KATALOG (Mit Leistung in WATT) ---
+# --- 3. PRODUKT KATALOG ---
 PRODUKT_KATALOG = {
     "Steuerung": [
         {"name": "Shelly Plus 2PM", "preis": 29.90, "watt": 1, "pdf": "https://kb.shelly.cloud/"},
         {"name": "Shelly Dimmer 2", "preis": 32.50, "watt": 1, "pdf": "https://kb.shelly.cloud/"},
     ],
     "Verbraucher (Last)": [
-        {"name": "Steckdose (Standard)", "preis": 8.50, "watt": 200, "pdf": ""}, # Pauschale Annahme
+        {"name": "Steckdose (Standard)", "preis": 8.50, "watt": 200, "pdf": ""},
         {"name": "Steckdose (Waschmaschine)", "preis": 8.50, "watt": 2500, "pdf": ""},
         {"name": "Steckdose (Backofen)", "preis": 12.00, "watt": 3000, "pdf": ""},
         {"name": "Steckdose (Induktionsfeld)", "preis": 12.00, "watt": 7000, "pdf": ""},
@@ -56,69 +55,72 @@ PRODUKT_KATALOG = {
     ]
 }
 
-# --- FUNKTION: VERTEILER-BAUM & LASTBERECHNUNG ---
+# --- 4. FUNKTIONEN (PLOTTING) ---
+
 def plot_electrical_tree(strings, materials):
-    # Graphviz Initialisierung
+    """Zeichnet den Verteiler-Stammbaum mit Graphviz"""
     dot = graphviz.Digraph(comment='Verteilerplan')
-    dot.attr(rankdir='TB') # Top to Bottom
+    dot.attr(rankdir='TB')
     dot.attr('node', fontname='Arial')
     
-    # Hauptverteiler (Wurzel)
+    # Hauptverteiler
     dot.node('UV', '⚡ Hauptverteiler (UV)', shape='doubleoctagon', style='filled', fillcolor='#ffeb3b')
 
     for s in strings:
         s_id = s['id']
         
-        # 1. Last Berechnung für diesen String
+        # Lastberechnung
         connected_mats = [m for m in materials if m.get('String') == s_id]
-        
-        # Summe der Anschlussleistung
         total_watt = sum([m.get('Watt', 0) * m['Menge'] for m in connected_mats])
-        
-        # Gleichzeitigkeitsfaktor anwenden
         real_load = total_watt * s['factor']
         
-        # Überlast Prüfung (bei 230V)
+        # Überlast-Check
         max_watt = s['fuse'] * 230
         load_percent = (real_load / max_watt) * 100 if max_watt > 0 else 0
         
-        # Farb-Logik (Ampelsystem)
-        color = '#c8e6c9' # Grün (Alles OK)
+        # Farben
+        color = '#c8e6c9' # Grün
         warn_text = ""
-        if load_percent > 80: 
-            color = '#fff9c4' # Gelb (Grenzwertig)
+        if load_percent > 80: color = '#fff9c4' # Gelb
         if load_percent > 100: 
-            color = '#ffcdd2' # Rot (Überlast!)
+            color = '#ffcdd2' # Rot
             warn_text = "\n⚠️ ÜBERLAST"
         
-        # Label für den String-Knoten
-        label = f"{s['name']}\nSicherung: {s['fuse']}A\nLast (GLF {s['factor']}): {real_load:.0f}W{warn_text}"
-        
-        # String Knoten zeichnen
+        label = f"{s['name']}\n{s['fuse']}A | Faktor: {s['factor']}\nLast: {real_load:.0f}W{warn_text}"
         dot.node(s_id, label, shape='folder', style='filled', fillcolor=color)
         dot.edge('UV', s_id)
         
-        # 2. Geräte an den String hängen
-        # Wir gruppieren gleiche Geräte, damit der Baum nicht explodiert
+        # Geräte gruppieren
         grouped_items = {}
         for m in connected_mats:
             name = m['Artikel']
-            if name not in grouped_items:
-                grouped_items[name] = {"menge": 0, "watt": m.get('Watt', 0)}
+            if name not in grouped_items: grouped_items[name] = {"menge": 0, "watt": m.get('Watt', 0)}
             grouped_items[name]["menge"] += m['Menge']
             
         for item_name, data in grouped_items.items():
-            # Kleine Boxen für Geräte
             node_id = f"{s_id}_{item_name}"
-            total_item_watt = data['watt'] * data['menge']
-            m_label = f"{data['menge']}x {item_name}\n({total_item_watt}W)"
-            
+            m_label = f"{data['menge']}x {item_name}\n({data['watt']*data['menge']}W)"
             dot.node(node_id, m_label, shape='note', fontsize='9')
             dot.edge(s_id, node_id)
             
     return dot
 
-# --- SIDEBAR ---
+def plot_room_map(rooms):
+    """Zeichnet die einfache Raumkarte mit Matplotlib"""
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for idx, r in enumerate(rooms):
+        rect = patches.Rectangle((r['x'], r['y']), r['l'], r['b'], linewidth=2, edgecolor='#1f77b4', facecolor='#e3f2fd', alpha=0.5)
+        ax.add_patch(rect)
+        ax.text(r['x']+r['l']/2, r['y']+r['b']/2, r['name'], ha='center', fontweight='bold')
+    
+    ax.set_xlim(-2, 20)
+    ax.set_ylim(-2, 20)
+    ax.set_aspect('equal')
+    ax.grid(True, linestyle=':')
+    ax.set_title("Gebäudeübersicht")
+    return fig
+
+# --- 5. SIDEBAR ---
 st.sidebar.title("LEC Manager")
 project_options = ["Neues Projekt"] + list(st.session_state.db_projects.keys())
 
@@ -138,23 +140,23 @@ if selection == "Neues Projekt":
         new_id = f"P-{len(st.session_state.db_projects)+1:03d}"
         st.session_state.db_projects[new_id] = {"kunde": new_kunde, "ort": new_ort, "status": "Neu", "created": "Heute"}
         st.session_state.db_rooms[new_id] = []
-        st.session_state.db_strings[new_id] = [] # Leere String Liste
+        st.session_state.db_strings[new_id] = []
         st.success("Erstellt!")
         st.rerun()
 else:
     st.session_state.current_project_id = selection
 
-# --- MAIN ---
+# --- 6. MAIN CONTENT ---
 if st.session_state.current_project_id:
     curr_id = st.session_state.current_project_id
     proj_data = st.session_state.db_projects[curr_id]
     
     st.title(f"Projekt: {proj_data['kunde']}")
+    st.caption(f"Ort: {proj_data['ort']}")
     
-    # TABS
-    tab1, tab2, tab3 = st.tabs(["🏗️ Editor", "⚡ Strings & Last", "📦 Material & Zuordnung"])
+    tab1, tab2, tab3 = st.tabs(["🏗️ Editor (Räume)", "⚡ Strings & Last", "📦 Material & Preise"])
     
-    # --- TAB 1: EDITOR (Räume) ---
+    # --- TAB 1: RÄUME ---
     with tab1:
         col_edit, col_view = st.columns([1, 2])
         if curr_id not in st.session_state.db_rooms: st.session_state.db_rooms[curr_id] = []
@@ -173,136 +175,105 @@ if st.session_state.current_project_id:
             
             if rooms:
                 st.divider()
-                st.write("**Räume positionieren:**")
+                st.write("**Verschieben:**")
                 r_labels = [r['name'] for r in rooms]
                 idx = st.radio("Raum wählen", range(len(rooms)), format_func=lambda x: r_labels[x])
-                
                 cur = rooms[idx]
-                nx = st.slider("X-Pos", -5.0, 25.0, float(cur['x']), 0.25, key=f"sx_{curr_id}")
-                ny = st.slider("Y-Pos", -5.0, 25.0, float(cur['y']), 0.25, key=f"sy_{curr_id}")
+                nx = st.slider("X-Position", -5.0, 25.0, float(cur['x']), 0.25, key=f"sx_{curr_id}")
+                ny = st.slider("Y-Position", -5.0, 25.0, float(cur['y']), 0.25, key=f"sy_{curr_id}")
                 st.session_state.db_rooms[curr_id][idx]['x'] = nx
                 st.session_state.db_rooms[curr_id][idx]['y'] = ny
 
         with col_view:
-            # Einfacher Matplotlib Plot für Orientierung
             if rooms:
-                fig, ax = plt.subplots(figsize=(8, 5))
-                for idx, r in enumerate(rooms):
-                    active = (idx == idx) # Dummy
-                    rect = patches.Rectangle((r['x'], r['y']), r['l'], r['b'], linewidth=2, edgecolor='#1f77b4', facecolor='#e3f2fd', alpha=0.5)
-                    ax.add_patch(rect)
-                    ax.text(r['x']+r['l']/2, r['y']+r['b']/2, r['name'], ha='center')
-                    ax.set_xlim(-2, 20); ax.set_ylim(-2, 20); ax.set_aspect('equal'); ax.grid(True, linestyle=':')
-                st.pyplot(fig)
+                st.pyplot(plot_room_map(rooms))
 
-    # --- TAB 2: STRINGS & LAST (Das Herzstück) ---
+    # --- TAB 2: STRINGS ---
     with tab2:
         col_def, col_tree = st.columns([1, 2])
-        
         if curr_id not in st.session_state.db_strings: st.session_state.db_strings[curr_id] = []
         my_strings = st.session_state.db_strings[curr_id]
         
         with col_def:
-            st.subheader("Stromkreise definieren")
-            
+            st.subheader("Stromkreise")
             with st.form("new_string"):
-                s_name = st.text_input("Bezeichnung (z.B. Küche)", "Küche Steckdosen")
+                s_name = st.text_input("Bezeichnung", "Küche Steckdosen")
                 c1, c2 = st.columns(2)
-                s_fuse = c1.selectbox("Absicherung (A)", [10, 13, 16, 20, 32], index=2)
-                s_factor = c2.slider("Gleichzeitigkeitsfaktor", 0.1, 1.0, 0.7, 0.1, help="1.0 = Alle Geräte laufen gleichzeitig voll. 0.5 = Nur die Hälfte.")
-                
-                if st.form_submit_button("String anlegen"):
+                s_fuse = c1.selectbox("Sicherung (A)", [10, 16, 20, 32], index=1)
+                s_factor = c2.slider("GL-Faktor", 0.1, 1.0, 0.7)
+                if st.form_submit_button("Anlegen"):
                     new_s_id = f"S{len(my_strings)+1:02d}"
-                    st.session_state.db_strings[curr_id].append(
-                        {"id": new_s_id, "name": s_name, "fuse": s_fuse, "factor": s_factor}
-                    )
+                    st.session_state.db_strings[curr_id].append({"id": new_s_id, "name": s_name, "fuse": s_fuse, "factor": s_factor})
                     st.rerun()
             
-            st.divider()
-            st.write("**Konfigurierte Strings:**")
-            if not my_strings: st.caption("Noch keine.")
+            st.write("**Liste:**")
             for s in my_strings:
-                with st.expander(f"{s['id']}: {s['name']} ({s['fuse']}A)"):
-                    st.write(f"Faktor: {s['factor']}")
-                    if st.button(f"Löschen {s['id']}", key=f"del_{s['id']}"):
+                with st.expander(f"{s['id']}: {s['name']}"):
+                    if st.button("Löschen", key=f"del_{s['id']}"):
                         st.session_state.db_strings[curr_id].remove(s)
                         st.rerun()
 
         with col_tree:
-            st.subheader("Verteiler & Lastfluss")
-            # Wir holen das Material für die Berechnung
             proj_mats = [m for m in st.session_state.db_material if m['Projekt'] == curr_id]
-            
             if my_strings:
                 try:
-                    chart = plot_electrical_tree(my_strings, proj_mats)
-                    st.graphviz_chart(chart, use_container_width=True)
-                except Exception as e:
-                    st.error(f"Fehler beim Zeichnen: {e}")
-                    st.info("Tipp: Haben Sie 'graphviz' in requirements.txt eingetragen?")
-            else:
-                st.warning("Bitte links Stromkreise anlegen.")
+                    st.graphviz_chart(plot_electrical_tree(my_strings, proj_mats), use_container_width=True)
+                except Exception:
+                    st.error("Graphviz Fehler. Bitte requirements.txt prüfen.")
 
-    # --- TAB 3: MATERIAL & ZUORDNUNG ---
+    # --- TAB 3: MATERIAL & PREISE ---
     with tab3:
-        st.subheader("Komponenten hinzufügen")
-        
+        st.subheader("Material & Kosten")
         my_rooms = [r['name'] for r in st.session_state.db_rooms.get(curr_id, [])]
-        
-        # String Liste bauen
         string_opts = {s['id']: f"{s['name']} ({s['fuse']}A)" for s in st.session_state.db_strings.get(curr_id, [])}
         
-        if not my_rooms:
-            st.warning("Bitte erst Räume anlegen!")
-        elif not string_opts:
-            st.warning("Bitte erst Strings (Tab 2) anlegen!")
-        else:
-            col_in1, col_in2 = st.columns(2)
+        if my_rooms and string_opts:
+            c1, c2, c3 = st.columns(3)
+            r_sel = c1.selectbox("Ort", my_rooms)
+            s_sel = c2.selectbox("Stromkreis", list(string_opts.keys()), format_func=lambda x: string_opts[x])
+            k_sel = c3.selectbox("Kategorie", list(PRODUKT_KATALOG.keys()))
             
-            with col_in1:
-                r_sel = st.selectbox("Ort / Raum", my_rooms)
-                cat_sel = st.selectbox("Kategorie", list(PRODUKT_KATALOG.keys()))
-                item_sel = st.selectbox("Artikel", [p['name'] for p in PRODUKT_KATALOG[cat_sel]])
+            c4, c5 = st.columns([2, 1])
+            i_sel = c4.selectbox("Artikel", [p['name'] for p in PRODUKT_KATALOG[k_sel]])
+            qty = c5.number_input("Menge", 1, 50, 1)
             
-            with col_in2:
-                # Hier verbinden wir Material mit Stromkreis
-                s_sel = st.selectbox("Anschluss an Stromkreis", list(string_opts.keys()), format_func=lambda x: string_opts[x])
-                qty = st.number_input("Menge", 1, 50, 1)
-                
-                st.write("")
-                if st.button("Hinzufügen & Verbinden", type="primary"):
-                    p_data = next(p for p in PRODUKT_KATALOG[cat_sel] if p['name'] == item_sel)
-                    st.session_state.db_material.append({
-                        "Projekt": curr_id, 
-                        "Raum": r_sel, 
-                        "String": s_sel, # <--- WICHTIG
-                        "Artikel": item_sel, 
-                        "Menge": qty, 
-                        "Preis": p_data['preis'], 
-                        "Watt": p_data.get('watt', 0),
-                        "PDF": p_data.get('pdf', '')
-                    })
-                    st.success("Gespeichert!")
+            if st.button("Hinzufügen", type="primary"):
+                p_data = next(p for p in PRODUKT_KATALOG[k_sel] if p['name'] == i_sel)
+                st.session_state.db_material.append({
+                    "Projekt": curr_id, "Raum": r_sel, "String": s_sel, "Artikel": i_sel, 
+                    "Menge": qty, "Preis": p_data['preis'], "Watt": p_data.get('watt', 0), "PDF": p_data.get('pdf', '')
+                })
+                st.success("Gespeichert!")
 
             st.divider()
             
-            # Auswertung
+            # Auswertung Tabelle
             proj_mats = [m for m in st.session_state.db_material if m['Projekt'] == curr_id]
             if proj_mats:
                 df = pd.DataFrame(proj_mats)
-                # Namen statt IDs anzeigen
-                df['String'] = df['String'].map(string_opts)
-                df['Gesamtlast'] = df['Menge'] * df['Watt']
                 
+                # Berechnungen
+                df['String Name'] = df['String'].map(string_opts)
+                df['Gesamtlast (W)'] = df['Menge'] * df['Watt']
+                df['Gesamtpreis (€)'] = df['Menge'] * df['Preis']
+                
+                # Anzeige
                 st.dataframe(
-                    df[["Raum", "String", "Artikel", "Menge", "Gesamtlast"]], 
+                    df[["Raum", "String Name", "Artikel", "Menge", "Preis", "Gesamtpreis (€)", "Gesamtlast (W)"]], 
                     use_container_width=True,
                     column_config={
-                        "Gesamtlast": st.column_config.NumberColumn(format="%d W")
+                        "Preis": st.column_config.NumberColumn(format="%.2f €"),
+                        "Gesamtpreis (€)": st.column_config.NumberColumn(format="%.2f €"),
+                        "Gesamtlast (W)": st.column_config.NumberColumn(format="%d W"),
                     }
                 )
-            else:
-                st.info("Noch kein Material erfasst.")
+                
+                st.markdown("---")
+                t_col1, t_col2 = st.columns(2)
+                t_col1.metric("Projekt Summe (Netto)", f"{df['Gesamtpreis (€)'].sum():.2f} €")
+                t_col2.metric("Gesamtanschlusswert", f"{df['Gesamtlast (W)'].sum()/1000:.1f} kW")
+        else:
+            st.warning("Bitte erst Räume (Tab 1) und Strings (Tab 2) anlegen.")
 
 else:
-    st.info("Wählen Sie ein Projekt.")
+    st.info("Bitte wählen Sie ein Projekt.")
