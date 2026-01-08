@@ -3,4 +3,4 @@ pandas
 matplotlib
 graphviz
 Pillow
-streamlit-gsheets-connection
+st-gsheets-connection
