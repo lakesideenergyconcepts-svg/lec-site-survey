@@ -3,13 +3,12 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import graphviz
-import random
-from PIL import Image # <--- WICHTIG: Das ist der neue Import!
+from PIL import Image
 
 # ==========================================
-# V1.1.1 - INIT & KONFIGURATION
+# CONFIG & DB
 # ==========================================
-st.set_page_config(page_title="LEC Manager V1.1", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="LEC Manager V1.2", page_icon="⚡", layout="wide")
 
 def init_db():
     defaults = {
@@ -17,10 +16,10 @@ def init_db():
             "P-001": {"kunde": "Müller", "ort": "FN", "bp_width": 20.0, "bp_height": 15.0}
         },
         'db_rooms': {
-            "P-001": [{"name": "Wohnzimmer", "l": 5.0, "b": 4.0, "x": 1.0, "y": 1.0}]
+            "P-001": [{"name": "Wohnzimmer", "l": 5.0, "b": 4.0, "x": 2.0, "y": 2.0}]
         },
         'db_strings': {
-            "P-001": [{"id": "S1", "name": "Std. Küche", "fuse": 16, "factor": 0.7, "cable_name": "NYM-J 3x1.5", "cable_len": 15, "cable_price": 0.65}]
+            "P-001": [{"id": "S1", "name": "Steckdosen", "fuse": 16, "factor": 0.7, "cable_name": "NYM-J 3x1.5", "cable_len": 15, "cable_price": 0.65}]
         },
         'db_material': [],
         'db_blueprints_data': {}, 
@@ -32,32 +31,19 @@ def init_db():
 
 init_db()
 
-# --- Katalog ---
 PRODUKT_KATALOG = {
-    "Steuerung": [
-        {"name": "Shelly Plus 2PM", "preis": 29.90, "watt": 1},
-        {"name": "Shelly Dimmer 2", "preis": 32.50, "watt": 1},
-    ],
-    "Verbraucher": [
-        {"name": "Steckdose (Standard)", "preis": 8.50, "watt": 200},
-        {"name": "Steckdose (Backofen)", "preis": 12.00, "watt": 3000},
-        {"name": "Lichtschalter", "preis": 12.00, "watt": 0},
-        {"name": "LED Spot", "preis": 25.00, "watt": 7},
-    ],
-    "Kabel": [
-        {"name": "NYM-J 3x1.5", "preis": 0.65, "watt": 0}, 
-        {"name": "NYM-J 5x1.5", "preis": 0.95, "watt": 0},
-        {"name": "KNX Busleitung", "preis": 0.55, "watt": 0},
-    ]
+    "Steuerung": [{"name": "Shelly Plus 2PM", "preis": 29.90, "watt": 1}, {"name": "Shelly Dimmer 2", "preis": 32.50, "watt": 1}],
+    "Verbraucher": [{"name": "Steckdose", "preis": 8.50, "watt": 200}, {"name": "Lichtschalter", "preis": 12.00, "watt": 0}],
+    "Kabel": [{"name": "NYM-J 3x1.5", "preis": 0.65, "watt": 0}, {"name": "NYM-J 5x1.5", "preis": 0.95, "watt": 0}]
 }
 
 # ==========================================
-# V1.1.1 - VISUALISIERUNG
+# PLOTTING
 # ==========================================
 
 def plot_wiring_tree(strings, materials):
     dot = graphviz.Digraph(comment='Verteiler')
-    dot.attr(rankdir='TB')
+    dot.attr(rankdir='TB', bgcolor='transparent')
     dot.attr('node', fontname='Arial', fontsize='10', shape='box', style='filled')
     dot.node('UV', '⚡ Hauptverteiler', fillcolor='#ffeb3b', shape='doubleoctagon')
 
@@ -68,38 +54,29 @@ def plot_wiring_tree(strings, materials):
         load = watts * s['factor']
         max_load = s['fuse'] * 230
         ratio = load / max_load if max_load > 0 else 0
-        
         col = '#c8e6c9'
         if ratio > 0.8: col = '#fff9c4'
         if ratio > 1.0: col = '#ffcdd2'
-        
-        label = f"{s['name']}\n({s['fuse']}A)\nLast: {load:.0f}W"
-        dot.node(s_id, label, fillcolor=col, shape='folder')
+        dot.node(s_id, f"{s['name']}\n{load:.0f}W", fillcolor=col, shape='folder')
         dot.edge('UV', s_id)
-        
-        counts = {}
-        for m in mats: counts[m['Artikel']] = counts.get(m['Artikel'], 0) + m['Menge']
-        for art, count in counts.items():
-            nid = f"{s_id}_{art}"
-            dot.node(nid, f"{count}x {art}", fontsize='8', fillcolor='white')
-            dot.edge(s_id, nid)
     return dot
 
 def plot_installation_map(rooms, materials, strings, active_idx=None, blueprint_img=None, bp_dims=(20,15)):
+    # Figure Size anpassen
     fig, ax = plt.subplots(figsize=(10, 7))
     
-    # --- BLUEPRINT LAYER ---
+    # 1. BLUEPRINT (Hintergrund)
     if blueprint_img is not None:
-        # Hier lag der Fehler: Wir übergeben jetzt das PIL Image Objekt
+        # Extent definiert die Grenzen: [Links, Rechts, Unten, Oben]
         ax.imshow(blueprint_img, extent=[0, bp_dims[0], 0, bp_dims[1]], origin='lower', alpha=0.5)
 
-    # --- RAUM LAYER ---
+    # 2. RÄUME
     for r in rooms:
         rect = patches.Rectangle((r['x'], r['y']), r['l'], r['b'], linewidth=2, edgecolor='#0277bd', facecolor='#b3e5fc', alpha=0.3, zorder=5)
         ax.add_patch(rect)
-        ax.text(r['x']+0.2, r['y']+r['b']-0.4, r['name'], fontweight='bold', color='#01579b', zorder=6)
+        ax.text(r['x']+0.2, r['y']+r['b']-0.5, r['name'], fontweight='bold', color='#01579b', zorder=6)
 
-    # --- GERÄTE LAYER ---
+    # 3. GERÄTE
     cmap = plt.get_cmap('tab10')
     s_colors = {s['id']: cmap(i%10) for i, s in enumerate(strings)}
 
@@ -121,26 +98,24 @@ def plot_installation_map(rooms, materials, strings, active_idx=None, blueprint_
                 ax.text(abs_x, abs_y+0.6, m['Artikel'], ha='center', fontweight='bold', color='red', zorder=11, bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
 
     ax.set_aspect('equal')
-    ax.grid(True, linestyle=':', alpha=0.2)
+    ax.grid(True, linestyle=':', alpha=0.3)
     ax.set_title("Installationsplan")
     
-    max_x = bp_dims[0] if blueprint_img is not None else 20
-    max_y = bp_dims[1] if blueprint_img is not None else 15
-
+    # Grenzen setzen
+    max_x = bp_dims[0] if blueprint_img else 20
+    max_y = bp_dims[1] if blueprint_img else 15
     if rooms:
         max_x = max(max_x, max([r['x']+r['l'] for r in rooms]) + 1)
         max_y = max(max_y, max([r['y']+r['b'] for r in rooms]) + 1)
-
+    
     ax.set_xlim(-1, max_x)
     ax.set_ylim(-1, max_y)
-        
     return fig
 
 # ==========================================
-# V1.1.1 - UI
+# UI
 # ==========================================
-
-st.sidebar.title("LEC Manager v1.1")
+st.sidebar.title("LEC Manager v1.2")
 projs = st.session_state.db_projects
 sel_p = st.sidebar.selectbox("Projekt", ["Neues Projekt"] + list(projs.keys()), 
                              format_func=lambda x: "Neues Projekt" if x=="Neues Projekt" else f"{projs[x]['kunde']}")
@@ -161,9 +136,9 @@ if st.session_state.current_project_id:
     
     st.title(f"Projekt: {pdata['kunde']}")
     
-    tab1, tab2, tab3, tab4 = st.tabs(["🏗️ Gebäude & Plan", "⚡ Stromkreise", "📍 Installation", "💰 Liste"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🏗️ Plan & Räume", "⚡ Stromkreise", "📍 Installation", "💰 Liste"])
     
-    # Daten
+    # DATEN LADEN
     rooms = st.session_state.db_rooms.get(pid, [])
     strings = st.session_state.db_strings.get(pid, [])
     mats = [m for m in st.session_state.db_material if m['Projekt'] == pid]
@@ -172,116 +147,124 @@ if st.session_state.current_project_id:
     bp_w = pdata.get('bp_width', 20.0)
     bp_h = pdata.get('bp_height', 15.0)
 
-    # --- TAB 1 ---
+    # --- TAB 1: BLUEPRINT & RÄUME ---
     with tab1:
         c_conf, c_view = st.columns([1, 2])
         with c_conf:
             st.subheader("1. Gebäudeplan")
-            with st.expander("🖨️ Plan Upload", expanded=True):
-                uploaded_file = st.file_uploader("Bild (JPG/PNG)", type=['png', 'jpg', 'jpeg'])
-                if uploaded_file is not None:
-                    # FIX: Bild mit PIL öffnen!
+            
+            # FILE UPLOADER
+            uploaded_file = st.file_uploader("Grundriss laden (Bild)", type=['png', 'jpg', 'jpeg'], key="bp_upload")
+            
+            if uploaded_file is not None:
+                try:
+                    # Bild laden und im State speichern
                     image = Image.open(uploaded_file)
                     st.session_state.db_blueprints_data[pid] = image
                     blueprint_data = image
-                    st.success("Geladen!")
-                
-                st.write("**Skalierung (Meter):**")
-                c_w, c_h = st.columns(2)
-                new_w = c_w.number_input("Breite (X)", value=bp_w)
-                new_h = c_h.number_input("Höhe (Y)", value=bp_h)
-                
-                if new_w != bp_w or new_h != bp_h:
-                    st.session_state.db_projects[pid]['bp_width'] = new_w
-                    st.session_state.db_projects[pid]['bp_height'] = new_h
-                    st.rerun()
+                    st.success("Bild erfolgreich geladen!")
+                    # VORSCHAU ANZEIGEN (Damit man sieht, dass es geklappt hat)
+                    st.image(image, caption="Vorschau", use_container_width=True)
+                except Exception as e:
+                    st.error(f"Fehler beim Laden: {e}")
+            
+            elif blueprint_data:
+                st.info("Plan ist aktiv.")
+                with st.expander("Aktuellen Plan anzeigen"):
+                    st.image(blueprint_data, caption="Aktiver Plan", use_container_width=True)
 
             st.divider()
-            st.subheader("2. Räume")
-            with st.form("add_room"):
-                rn = st.text_input("Name", "Raum 1")
-                c_l, c_b = st.columns(2)
-                l = c_l.number_input("Länge", 4.0)
-                b = c_b.number_input("Breite", 3.0)
-                if st.form_submit_button("Anlegen"):
-                    rooms.append({"name": rn, "l": l, "b": b, "x": new_w/2-l/2, "y": new_h/2-b/2})
+            st.write("**Skalierung:**")
+            c_w, c_h = st.columns(2)
+            nw = c_w.number_input("Breite (m)", value=bp_w)
+            nh = c_h.number_input("Höhe (m)", value=bp_h)
+            if nw != bp_w or nh != bp_h:
+                st.session_state.db_projects[pid]['bp_width'] = nw
+                st.session_state.db_projects[pid]['bp_height'] = nh
+                st.rerun()
+
+            st.divider()
+            st.subheader("2. Raum Editor")
+            with st.form("new_room"):
+                rn = st.text_input("Name", "Raum 01")
+                cl, cb = st.columns(2)
+                l = cl.number_input("Länge", 4.0)
+                b = cb.number_input("Breite", 3.0)
+                if st.form_submit_button("Raum erstellen"):
+                    rooms.append({"name": rn, "l": l, "b": b, "x": nw/2, "y": nh/2})
                     st.rerun()
             
             if rooms:
-                st.write("**Verschieben:**")
-                ridx = st.radio("Raum:", range(len(rooms)), format_func=lambda i: rooms[i]['name'])
-                rooms[ridx]['x'] = st.slider("X", -5.0, new_w+5, rooms[ridx]['x'], 0.5)
-                rooms[ridx]['y'] = st.slider("Y", -5.0, new_h+5, rooms[ridx]['y'], 0.5)
-        
-        with c_view:
-            st.pyplot(plot_installation_map(rooms, [], strings, blueprint_img=blueprint_data, bp_dims=(new_w, new_h)))
+                st.write("Raum schieben:")
+                ri = st.radio("Wahl:", range(len(rooms)), format_func=lambda i: rooms[i]['name'])
+                rooms[ri]['x'] = st.slider("X", -5.0, nw+5, rooms[ri]['x'], 0.5)
+                rooms[ri]['y'] = st.slider("Y", -5.0, nh+5, rooms[ri]['y'], 0.5)
 
-    # --- TAB 2 ---
+        with c_view:
+            # PLOT AUFRUFEN
+            fig = plot_installation_map(rooms, [], strings, blueprint_img=blueprint_data, bp_dims=(nw, nh))
+            st.pyplot(fig)
+
+    # --- TAB 2: STROMKREISE ---
     with tab2:
         c1, c2 = st.columns([1, 2])
         with c1:
-            with st.form("add_string"):
-                sn = st.text_input("Name", "Steckdosen")
-                sf = st.selectbox("Sicherung (A)", [10, 16, 32], index=1)
+            with st.form("ns"):
+                sn = st.text_input("Name", "Kreis")
+                sf = st.selectbox("Sicherung", [10, 16, 32], index=1)
                 sc = st.selectbox("Kabel", [k['name'] for k in PRODUKT_KATALOG['Kabel']])
                 sl = st.number_input("Länge", 15)
-                if st.form_submit_button("Anlegen"):
+                if st.form_submit_button("Add"):
                     pr = next(k['preis'] for k in PRODUKT_KATALOG['Kabel'] if k['name']==sc)
-                    strings.append({"id": f"S{len(strings)+1}", "name": sn, "fuse": sf, "factor": 0.7, 
-                                    "cable_name": sc, "cable_len": sl, "cable_price": pr})
+                    strings.append({"id": f"S{len(strings)+1}", "name": sn, "fuse": sf, "factor": 0.7, "cable_name": sc, "cable_len": sl, "cable_price": pr})
                     st.rerun()
             for s in strings:
-                if st.button(f"Löschen: {s['name']}", key=f"d_{s['id']}"): strings.remove(s); st.rerun()
-        with c2: st.info("Kabelkosten in Tab 4.")
+                if st.button(f"Del {s['name']}", key=f"d{s['id']}"): strings.remove(s); st.rerun()
+        with c2: st.info("Details in Tab 4.")
 
-    # --- TAB 3 ---
+    # --- TAB 3: INSTALLATION ---
     with tab3:
-        if not rooms or not strings:
-            st.warning("Erst Räume und Kreise anlegen.")
+        if not rooms or not strings: st.warning("Fehlende Daten (Räume/Kreise)")
         else:
-            c_map, c_tool = st.columns([2, 1])
-            with c_tool:
-                st.subheader("Gerät")
-                r_sel = st.selectbox("Raum", [r['name'] for r in rooms], key="qa_r")
-                s_sel = st.selectbox("Kreis", [s['id'] for s in strings], format_func=lambda x: next(s['name'] for s in strings if s['id']==x), key="qa_s")
-                k_sel = st.selectbox("Kat", ["Steuerung", "Verbraucher"], key="qa_k")
-                i_sel = st.selectbox("Art", [p['name'] for p in PRODUKT_KATALOG[k_sel]], key="qa_i")
-                if st.button("Platzieren"):
-                    p_dat = next(p for p in PRODUKT_KATALOG[k_sel] if p['name']==i_sel)
-                    t_room = next(r for r in rooms if r['name']==r_sel)
+            cm, ct = st.columns([2, 1])
+            with ct:
+                st.subheader("Platzierung")
+                r = st.selectbox("Raum", [r['name'] for r in rooms], key="qr")
+                s = st.selectbox("Kreis", [s['id'] for s in strings], format_func=lambda x: next(si['name'] for si in strings if si['id']==x), key="qs")
+                k = st.selectbox("Kat", ["Steuerung", "Verbraucher"], key="qk")
+                i = st.selectbox("Art", [p['name'] for p in PRODUKT_KATALOG[k]], key="qi")
+                if st.button("Setzen"):
+                    pd = next(p for p in PRODUKT_KATALOG[k] if p['name']==i)
+                    tr = next(rx for rx in rooms if rx['name']==r)
                     st.session_state.db_material.append({
-                        "Projekt": pid, "Raum": r_sel, "String": s_sel, "Artikel": i_sel, "Menge": 1,
-                        "Preis": p_dat['preis'], "Watt": p_dat['watt'], "pos_x": t_room['l']/2, "pos_y": t_room['b']/2
+                        "Projekt": pid, "Raum": r, "String": s, "Artikel": i, "Menge": 1, 
+                        "Preis": pd['preis'], "Watt": pd['watt'], "pos_x": tr['l']/2, "pos_y": tr['b']/2
                     })
                     st.rerun()
-
+                
                 st.divider()
                 if mats:
-                    midx = st.radio("Wahl:", range(len(mats)), format_func=lambda i: f"{mats[i]['Artikel']} ({mats[i]['Raum']})")
-                    curr_mat = mats[midx]
-                    real_idx = st.session_state.db_material.index(curr_mat)
-                    r_lim = next(r for r in rooms if r['name'] == curr_mat['Raum'])
-                    nx = st.slider("X", 0.0, float(r_lim['l']), float(curr_mat.get('pos_x', 0)), 0.25, key="m_x")
-                    ny = st.slider("Y", 0.0, float(r_lim['b']), float(curr_mat.get('pos_y', 0)), 0.25, key="m_y")
-                    st.session_state.db_material[real_idx]['pos_x'] = nx
-                    st.session_state.db_material[real_idx]['pos_y'] = ny
-                else: midx = None
+                    mi = st.radio("Edit:", range(len(mats)), format_func=lambda x: f"{mats[x]['Artikel']}")
+                    cm_ = mats[mi]
+                    rix = st.session_state.db_material.index(cm_)
+                    rl = next(rx for rx in rooms if rx['name']==cm_['Raum'])
+                    st.session_state.db_material[rix]['pos_x'] = st.slider("X", 0.0, rl['l'], cm_['pos_x'], 0.25, key="mx")
+                    st.session_state.db_material[rix]['pos_y'] = st.slider("Y", 0.0, rl['b'], cm_['pos_y'], 0.25, key="my")
+                else: mi = None
+            
+            with cm:
+                st.pyplot(plot_installation_map(rooms, mats, strings, active_idx=mi, blueprint_img=blueprint_data, bp_dims=(bp_w, bp_h)))
 
-            with c_map:
-                st.pyplot(plot_installation_map(rooms, mats, strings, active_idx=midx, blueprint_img=blueprint_data, bp_dims=(new_w, new_h)))
-
-    # --- TAB 4 ---
+    # --- TAB 4: LISTE ---
     with tab4:
-        c_list, c_tree = st.columns([1, 1])
-        with c_list:
-            rows = []
-            for m in mats: rows.append({"Typ": "Gerät", "Artikel": m['Artikel'], "Menge": m['Menge'], "Gesamt": m['Menge']*m['Preis']})
-            for s in strings: rows.append({"Typ": "Kabel", "Artikel": f"Kabel {s['name']}", "Menge": s['cable_len'], "Gesamt": s['cable_len']*s['cable_price']})
-            if rows:
-                df = pd.DataFrame(rows)
-                st.dataframe(df[["Typ", "Artikel", "Menge", "Gesamt"]], use_container_width=True)
-                st.success(f"Netto: {df['Gesamt'].sum():.2f} €")
-        with c_tree:
+        cl, ct = st.columns(2)
+        with cl:
+            d = []
+            for m in mats: d.append({"Typ": "Item", "Name": m['Artikel'], "€": m['Preis']})
+            for s in strings: d.append({"Typ": "Kabel", "Name": s['cable_name'], "€": s['cable_len']*s['cable_price']})
+            if d:
+                df = pd.DataFrame(d)
+                st.dataframe(df, use_container_width=True)
+                st.metric("Total", f"{df['€'].sum():.2f} €")
+        with ct:
             if strings: st.graphviz_chart(plot_wiring_tree(strings, mats))
-else:
-    st.info("Projekt wählen.")
