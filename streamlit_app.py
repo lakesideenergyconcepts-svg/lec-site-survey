@@ -7,9 +7,9 @@ from PIL import Image
 from streamlit_gsheets import GSheetsConnection
 
 # ==========================================
-# KONFIGURATION V2.2 (DEBUG MODE)
+# KONFIGURATION V2.2.1 (Fix Icon Error)
 # ==========================================
-st.set_page_config(page_title="LEC Manager V2.2", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="LEC Manager V2.2.1", page_icon="⚡", layout="wide")
 
 # Verbindung
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -25,13 +25,12 @@ def safe_read(worksheet_name, required_columns):
         df.columns = df.columns.str.lower().str.strip()
         return df
     except Exception as e:
-        # Kein Fehler anzeigen, sondern leeres DF liefern (für Erststart)
         return pd.DataFrame(columns=required_columns)
 
 def load_data():
     st.cache_data.clear()
     
-    # Spalten-Definitionen (Müssen mit Sheet übereinstimmen!)
+    # Spalten-Definitionen
     cols_proj = ['id', 'kunde', 'ort', 'bp_width', 'bp_height', 'created_at']
     cols_room = ['projekt_id', 'name', 'l', 'b', 'x', 'y']
     cols_str  = ['projekt_id', 'id', 'name', 'fuse', 'factor', 'cable_name', 'cable_len', 'cable_price']
@@ -42,16 +41,16 @@ def load_data():
     df_strings = safe_read("strings", cols_str)
     df_mat = safe_read("installation", cols_mat)
     
-    # Leere Zeilen rausfiltern (Google Sheets hat oft Geisterzeilen)
     if not df_proj.empty and 'id' in df_proj.columns:
         df_proj = df_proj.dropna(subset=['id'])
     
     return df_proj, df_rooms, df_strings, df_mat
 
 def save_row(worksheet, data_dict):
-    """Speichert Daten und zeigt Fehler an, falls es knallt."""
+    """Speichert Daten in Google Sheets."""
     try:
-        st.info(f"Speichere in '{worksheet}'...", icon="Mq") # Feedback, dass was passiert
+        # HIER WAR DER FEHLER: Icon korrigiert zu '⏳'
+        st.info(f"Speichere in '{worksheet}'...", icon="⏳")
         
         # 1. Aktuelle Daten lesen
         df_curr = conn.read(worksheet=worksheet, ttl=0)
@@ -70,13 +69,12 @@ def save_row(worksheet, data_dict):
         
         st.success("Erfolgreich gespeichert!", icon="✅")
         st.cache_data.clear()
-        return True # Signal für Erfolg
+        return True 
         
     except Exception as e:
         st.error(f"❌ FEHLER BEIM SPEICHERN in {worksheet}:")
-        st.code(str(e)) # Zeige den genauen Fehler
-        st.warning("Bitte prüfen: Hat der Bot 'Editor'-Rechte im Google Sheet?")
-        return False # Signal für Misserfolg
+        st.code(str(e)) 
+        return False 
 
 # Initial Laden
 df_projects, df_rooms, df_strings, df_material = load_data()
@@ -144,7 +142,7 @@ def plot_wiring_tree(strings_df, mats_df):
 # ==========================================
 # UI HAUPTBEREICH
 # ==========================================
-st.sidebar.title("LEC Manager V2.2")
+st.sidebar.title("LEC Manager V2.2.1")
 
 # Projektliste
 proj_list = df_projects['id'].tolist() if not df_projects.empty else []
@@ -152,7 +150,6 @@ sel_p = st.sidebar.selectbox("Projekt", ["Neues Projekt"] + proj_list)
 
 if sel_p == "Neues Projekt":
     st.sidebar.subheader("Neues Projekt")
-    # KEIN st.form MEHR! Damit wir Fehler sehen.
     k = st.sidebar.text_input("Kunde")
     o = st.sidebar.text_input("Ort")
     
@@ -167,16 +164,12 @@ if sel_p == "Neues Projekt":
                 "bp_width": 20.0, "bp_height": 15.0, 
                 "created_at": "Neu"
             })
-            
             if success:
-                st.rerun() # Nur neuladen wenn kein Fehler
-            else:
-                st.error("Speichern fehlgeschlagen. Siehe Fehlermeldung oben.")
+                st.rerun()
 
     cur_pid = None
 else:
     cur_pid = sel_p
-    # Sicherer Zugriff auf Series
     p_data = df_projects[df_projects['id'] == cur_pid].iloc[0]
     my_rooms = df_rooms[df_rooms['projekt_id'] == cur_pid] if not df_rooms.empty else pd.DataFrame()
     my_strings = df_strings[df_strings['projekt_id'] == cur_pid] if not df_strings.empty else pd.DataFrame()
