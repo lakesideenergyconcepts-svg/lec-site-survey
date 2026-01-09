@@ -7,338 +7,302 @@ from PIL import Image
 from streamlit_gsheets import GSheetsConnection
 
 # ==========================================
-# KONFIGURATION & INIT
+# KONFIGURATION V4.0 (Relationale DB)
 # ==========================================
-st.set_page_config(page_title="LEC Manager V2.2.1", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="LEC Manager V4.0", page_icon="⚡", layout="wide")
 
-# Verbindung herstellen
-# WICHTIG: Das funktioniert nur, wenn secrets.toml korrekt ist!
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# ==========================================
-# DATENBANK FUNKTIONEN
-# ==========================================
-
-def safe_read(worksheet_name, required_columns):
-    """Liest ein Blatt fehlertolerant ein."""
+# --- DATENBANK CORE ---
+def safe_read(worksheet, cols):
     try:
-        # ttl=0 bedeutet: Keine Zwischenspeicherung, immer live laden
-        df = conn.read(worksheet=worksheet_name, ttl=0)
-        
-        if df.empty:
-            return pd.DataFrame(columns=required_columns)
-        
-        # Spaltennamen normalisieren (Kleinschreibung, Leerzeichen weg)
+        df = conn.read(worksheet=worksheet, ttl=0)
+        if df.empty: return pd.DataFrame(columns=cols)
         df.columns = df.columns.str.lower().str.strip()
-        
-        # Prüfen ob alle Spalten da sind, fehlende ergänzen
-        for col in required_columns:
-            if col not in df.columns:
-                df[col] = None
-                
+        for c in cols: 
+            if c not in df.columns: df[c] = None
         return df
-    except Exception:
-        # Falls das Blatt gar nicht existiert oder Zugriff verweigert
-        return pd.DataFrame(columns=required_columns)
+    except: return pd.DataFrame(columns=cols)
 
 def load_data():
-    """Lädt alle Projektdaten."""
     st.cache_data.clear()
     
-    # Definition der erwarteten Struktur
-    cols_proj = ['id', 'kunde', 'ort', 'bp_width', 'bp_height', 'created_at']
-    cols_room = ['projekt_id', 'name', 'l', 'b', 'x', 'y']
-    cols_str  = ['projekt_id', 'id', 'name', 'fuse', 'factor', 'cable_name', 'cable_len', 'cable_price']
-    cols_mat  = ['projekt_id', 'raum', 'string', 'artikel', 'menge', 'preis', 'watt', 'pos_x', 'pos_y']
-
-    df_proj = safe_read("projekte", cols_proj)
-    df_rooms = safe_read("raeume", cols_room)
-    df_strings = safe_read("strings", cols_str)
-    df_mat = safe_read("installation", cols_mat)
+    # 1. KUNDEN (Stammdaten)
+    df_k = safe_read("kunden", ['id', 'name', 'strasse', 'plz', 'ort', 'telefon', 'email'])
     
-    # Leere Zeilen ohne ID entfernen
-    if not df_proj.empty and 'id' in df_proj.columns:
-        df_proj = df_proj.dropna(subset=['id'])
+    # 2. PROJEKTE (Verknüpft über kunden_id)
+    df_p = safe_read("projekte", ['id', 'kunden_id', 'status', 'bemerkung', 'bp_width', 'bp_height', 'created_at'])
     
-    return df_proj, df_rooms, df_strings, df_mat
+    # Rest bleibt gleich
+    df_r = safe_read("raeume", ['projekt_id', 'name', 'l', 'b', 'x', 'y'])
+    df_s = safe_read("strings", ['projekt_id', 'id', 'name', 'fuse', 'factor', 'cable_name', 'cable_len', 'cable_price'])
+    df_m = safe_read("installation", ['projekt_id', 'raum', 'string', 'artikel', 'menge', 'preis', 'watt', 'pos_x', 'pos_y'])
+    
+    # --- JOIN LOGIK ---
+    # Wir kleben die Kundendaten an die Projekte dran für die Anzeige
+    if not df_p.empty and not df_k.empty:
+        # Sicherstellen dass IDs Strings sind
+        df_p['kunden_id'] = df_p['kunden_id'].astype(str)
+        df_k['id'] = df_k['id'].astype(str)
+        
+        # Merge: Projekte + Kunden-Infos
+        df_display = pd.merge(df_p, df_k, left_on='kunden_id', right_on='id', how='left', suffixes=('', '_kd'))
+    else:
+        df_display = df_p.copy()
+        if 'name' not in df_display.columns: df_display['name'] = "Unbekannt"
+        if 'ort' not in df_display.columns: df_display['ort'] = "-"
 
-def save_row(worksheet, data_dict):
-    """Speichert eine neue Zeile in Google Sheets."""
+    return df_k, df_p, df_display, df_r, df_s, df_m
+
+def save_new_row(worksheet, data_dict):
     try:
-        # Feedback für den User
-        st.toast(f"Speichere in '{worksheet}'...", icon="⏳")
-        
-        # 1. Aktuellen Stand holen
+        st.info(f"Speichere in {worksheet}...", icon="⏳")
         df_curr = conn.read(worksheet=worksheet, ttl=0)
-        
-        # 2. Neue Daten vorbereiten
-        df_new = pd.DataFrame([data_dict])
-        
-        # 3. Anhängen
-        if df_curr.empty:
-            df_comb = df_new
-        else:
-            df_comb = pd.concat([df_curr, df_new], ignore_index=True)
-            
-        # 4. Update senden
+        df_comb = pd.concat([df_curr, pd.DataFrame([data_dict])], ignore_index=True)
         conn.update(worksheet=worksheet, data=df_comb)
-        
-        st.toast("Gespeichert!", icon="✅")
         st.cache_data.clear()
-        return True 
-        
+        return True
     except Exception as e:
-        st.error(f"❌ FEHLER BEIM SPEICHERN in Tabelle '{worksheet}':")
-        st.code(str(e))
-        st.warning("Tipp: Prüfen Sie die 'secrets.toml' und ob der Bot Editor-Rechte hat.")
-        return False 
+        st.error(f"Save Error: {e}"); return False
 
-# Initiales Laden der Daten
-df_projects, df_rooms, df_strings, df_material = load_data()
+def update_record(worksheet, id_col, record_id, updates):
+    """Universeller Updater für Kunden oder Projekte"""
+    try:
+        df = conn.read(worksheet=worksheet, ttl=0)
+        df[id_col] = df[id_col].astype(str) # Sicherheits-Cast
+        idx = df[df[id_col] == str(record_id)].index
+        if not idx.empty:
+            for k, v in updates.items(): df.at[idx[0], k] = v
+            conn.update(worksheet=worksheet, data=df)
+            st.toast("Gespeichert!", icon="✅"); st.cache_data.clear()
+            return True
+    except Exception as e: st.error(f"Update Error: {e}"); return False
+
+# LOAD
+df_kunden, df_projekte_raw, df_projekte_display, df_rooms, df_strings, df_mats = load_data()
 
 # ==========================================
-# VISUALISIERUNG & LOGIK
+# PLOTTING
 # ==========================================
 PRODUKT_KATALOG = {
-    "Steuerung": [
-        {"name": "Shelly Plus 2PM", "preis": 29.90, "watt": 1},
-        {"name": "Shelly Dimmer 2", "preis": 32.50, "watt": 1}
-    ],
-    "Verbraucher": [
-        {"name": "Steckdose", "preis": 8.50, "watt": 200},
-        {"name": "Lichtschalter", "preis": 12.00, "watt": 0},
-        {"name": "LED Spot", "preis": 25.00, "watt": 7}
-    ],
-    "Kabel": [
-        {"name": "NYM-J 3x1.5", "preis": 0.65, "watt": 0}, 
-        {"name": "NYM-J 5x1.5", "preis": 0.95, "watt": 0}
-    ]
+    "Steuerung": [{"name": "Shelly Plus 2PM", "preis": 29.90, "watt": 1}, {"name": "Shelly Dimmer 2", "preis": 32.50, "watt": 1}],
+    "Verbraucher": [{"name": "Steckdose", "preis": 8.50, "watt": 200}, {"name": "Lichtschalter", "preis": 12.00, "watt": 0}],
+    "Kabel": [{"name": "NYM-J 3x1.5", "preis": 0.65, "watt": 0}, {"name": "NYM-J 5x1.5", "preis": 0.95, "watt": 0}]
 }
 
-def plot_installation_map(rooms_df, mats_df, strings_df, active_idx=None, blueprint_img=None, bp_dims=(20,15)):
-    """Zeichnet den Plan (Blueprint + Räume + Geräte)"""
+def plot_map(rooms, mats, strings, active_idx=None, bg_img=None, dims=(20,15)):
     fig, ax = plt.subplots(figsize=(10, 7))
+    if bg_img: ax.imshow(bg_img, extent=[0, dims[0], 0, dims[1]], origin='lower', alpha=0.5)
     
-    # Layer 0: Blueprint Bild
-    if blueprint_img: 
-        ax.imshow(blueprint_img, extent=[0, bp_dims[0], 0, bp_dims[1]], origin='lower', alpha=0.5)
+    for _, r in rooms.iterrows():
+        rx, ry = float(r.get('x',0)), float(r.get('y',0))
+        rl, rb = float(r.get('l',4)), float(r.get('b',3))
+        ax.add_patch(patches.Rectangle((rx, ry), rl, rb, lw=2, ec='#0277bd', fc='#b3e5fc', alpha=0.3))
+        ax.text(rx+0.2, ry+rb-0.5, str(r['name']), fw='bold', color='#01579b')
 
-    # Layer 1: Räume
-    if not rooms_df.empty:
-        for _, r in rooms_df.iterrows():
-            # Sicheres Parsen der Zahlen
-            rx, ry = float(r.get('x', 0) or 0), float(r.get('y', 0) or 0)
-            rl, rb = float(r.get('l', 4) or 4), float(r.get('b', 3) or 3)
-            
-            rect = patches.Rectangle((rx, ry), rl, rb, linewidth=2, edgecolor='#0277bd', facecolor='#b3e5fc', alpha=0.3)
-            ax.add_patch(rect)
-            ax.text(rx+0.2, ry+rb-0.5, str(r['name']), fontweight='bold', color='#01579b')
-
-    # Layer 2: Geräte (Punkte)
-    if not mats_df.empty and not rooms_df.empty:
+    if not mats.empty:
         cmap = plt.get_cmap('tab10')
-        s_colors = {}
-        # Jedem String eine Farbe zuweisen
-        if not strings_df.empty:
-            for i, sid in enumerate(strings_df['id'].unique()): 
-                s_colors[sid] = cmap(i%10)
-
-        for idx, m in mats_df.iterrows():
-            room = rooms_df[rooms_df['name'] == m['raum']]
-            if not room.empty:
-                r = room.iloc[0]
-                rx, ry = float(r.get('x', 0) or 0), float(r.get('y', 0) or 0)
-                # Position im Raum + absolute Raumposition
-                px = float(m.get('pos_x') if pd.notnull(m.get('pos_x')) else float(r.get('l',4))/2)
-                py = float(m.get('pos_y') if pd.notnull(m.get('pos_y')) else float(r.get('b',3))/2)
-                
-                col = s_colors.get(m['string'], 'black')
-                size = 200 if (idx == active_idx) else 60
-                edge = 'red' if (idx == active_idx) else 'white'
-                
-                ax.scatter(rx+px, ry+py, c=[col], s=size, edgecolors=edge, linewidth=2, zorder=10)
+        sc = {sid: cmap(i%10) for i, sid in enumerate(strings['id'].unique())} if not strings.empty else {}
+        for idx, m in mats.iterrows():
+            rm = rooms[rooms['name']==m['raum']]
+            if not rm.empty:
+                r=rm.iloc[0]
+                rx,ry,rl,rb = float(r.get('x',0)), float(r.get('y',0)), float(r.get('l',4)), float(r.get('b',3))
+                px, py = float(m.get('pos_x', rl/2)), float(m.get('pos_y', rb/2))
+                col = sc.get(m['string'], 'black')
+                sz = 180 if idx==active_idx else 60
+                ax.scatter(rx+px, ry+py, c=[col], s=sz, ec='red' if idx==active_idx else 'white', lw=2, zorder=10)
     
-    ax.set_aspect('equal')
-    ax.grid(True, linestyle=':', alpha=0.3)
-    ax.set_xlim(-1, bp_dims[0]+1)
-    ax.set_ylim(-1, bp_dims[1]+1)
+    ax.set_aspect('equal'); ax.grid(True, ls=':', alpha=0.3)
+    ax.set_xlim(-1, dims[0]+1); ax.set_ylim(-1, dims[1]+1)
     return fig
 
-def plot_wiring_tree(strings_df, mats_df):
-    """Zeichnet den Schaltplan"""
-    dot = graphviz.Digraph(comment='Verteiler', node_attr={'shape': 'box', 'style': 'filled'})
-    dot.attr(rankdir='TB', bgcolor='transparent')
-    dot.node('UV', '⚡ Hauptverteiler', fillcolor='#ffeb3b', shape='doubleoctagon')
-    
-    if not strings_df.empty:
-        for _, s in strings_df.iterrows():
-            s_id = s['id']
-            # Last berechnen
-            s_load = 0
-            if not mats_df.empty:
-                s_mats = mats_df[mats_df['string'] == s_id]
-                s_load = (s_mats['menge'] * s_mats['watt']).sum()
-            
-            calc_load = s_load * float(s['factor'])
-            label = f"{s['name']}\n{calc_load:.0f}W"
-            
-            # Farbe je nach Auslastung
-            col = '#c8e6c9'
-            max_load = float(s['fuse']) * 230
-            if max_load > 0 and calc_load/max_load > 0.8: col = '#fff9c4' # Gelb
-            if max_load > 0 and calc_load/max_load > 1.0: col = '#ffcdd2' # Rot
-
-            dot.node(s_id, label, fillcolor=col, shape='folder')
-            dot.edge('UV', s_id)
-    return dot
-
 # ==========================================
-# BENUTZEROBERFLÄCHE (UI)
+# UI NAVIGATION
 # ==========================================
-st.sidebar.title("LEC Manager V2.2.1")
+st.sidebar.title("LEC V4.0")
 
-# Projekt Auswahl
-proj_list = df_projects['id'].tolist() if not df_projects.empty else []
-sel_p = st.sidebar.selectbox("Projekt", ["Neues Projekt"] + proj_list)
+nav = st.sidebar.radio("Menü", ["🏠 Dashboard", "➕ Neues Projekt", "📂 Projekte öffnen"])
 
-# --- MODUS: NEUES PROJEKT ---
-if sel_p == "Neues Projekt":
-    st.sidebar.subheader("Neues Projekt anlegen")
-    # Einfache Inputs statt st.form, damit Fehler sichtbar bleiben
-    k = st.sidebar.text_input("Kunde")
-    o = st.sidebar.text_input("Ort")
+# --- DASHBOARD ---
+if nav == "🏠 Dashboard":
+    st.header("Übersicht")
+    kpi1, kpi2 = st.columns(2)
+    kpi1.metric("Projekte", len(df_projekte_raw))
+    kpi2.metric("Kunden", len(df_kunden))
     
-    if st.sidebar.button("Projekt erstellen", type="primary"):
-        if not k:
-            st.sidebar.error("Bitte Kunden eingeben!")
+    st.subheader("Alle Projekte")
+    if not df_projekte_display.empty:
+        st.dataframe(df_projekte_display[['id', 'name', 'ort', 'status', 'created_at']], use_container_width=True, hide_index=True)
+    else:
+        st.info("Keine Projekte gefunden.")
+
+# --- NEUES PROJEKT (DER NEUE WIZARD) ---
+elif nav == "➕ Neues Projekt":
+    st.header("Projekt anlegen")
+    
+    # Entscheidung: Neu oder Bestand?
+    mode = st.radio("Kunde:", ["Bestandskunde wählen", "Neuen Kunden anlegen"], horizontal=True)
+    
+    kunden_id_to_use = None
+    
+    if mode == "Bestandskunde wählen":
+        if df_kunden.empty:
+            st.warning("Noch keine Kunden angelegt.")
         else:
-            nid = f"P-{len(proj_list)+1:03d}"
-            # Speichern in DB
-            success = save_row("projekte", {
-                "id": nid, 
-                "kunde": k, 
-                "ort": o, 
-                "bp_width": 20.0, 
-                "bp_height": 15.0, 
-                "created_at": "Neu"
-            })
-            if success:
-                st.rerun()
-
-    cur_pid = None
-
-# --- MODUS: PROJEKT BEARBEITEN ---
-else:
-    cur_pid = sel_p
-    # Aktuelle Daten filtern
-    p_data = df_projects[df_projects['id'] == cur_pid].iloc[0]
-    my_rooms = df_rooms[df_rooms['projekt_id'] == cur_pid] if not df_rooms.empty else pd.DataFrame()
-    my_strings = df_strings[df_strings['projekt_id'] == cur_pid] if not df_strings.empty else pd.DataFrame()
-    my_mats = df_material[df_material['projekt_id'] == cur_pid] if not df_material.empty else pd.DataFrame()
-
-if cur_pid:
-    st.title(f"Projekt: {p_data['kunde']} ({p_data['ort']})")
-    
-    # Session State für Blueprint Bild (bleibt im RAM, wird nicht in Sheets gespeichert)
-    if 'blueprint' not in st.session_state: st.session_state.blueprint = None
-    
-    # Die 4 Haupt-Reiter
-    t1, t2, t3, t4 = st.tabs(["🏗️ Gebäude", "⚡ Stromkreise", "📍 Installation", "💰 Liste"])
-
-    # --- TAB 1: GEBÄUDE & PLAN ---
-    with t1:
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            st.subheader("Plan & Maße")
-            up = st.file_uploader("Grundriss (Bild)", type=['jpg', 'png'])
-            if up: st.session_state.blueprint = Image.open(up)
+            # Dropdown mit Namen
+            k_sel = st.selectbox("Kunde auswählen", df_kunden['id'].tolist(), format_func=lambda x: df_kunden[df_kunden['id']==x]['name'].values[0])
+            kunden_id_to_use = k_sel
             
-            # Maße holen (Default oder aus DB)
-            db_w = float(p_data['bp_width']) if pd.notnull(p_data['bp_width']) else 20.0
-            db_h = float(p_data['bp_height']) if pd.notnull(p_data['bp_height']) else 15.0
-            
-            nw = st.number_input("Breite (m)", value=db_w)
-            nh = st.number_input("Höhe (m)", value=db_h)
-            
-            st.divider()
-            st.subheader("Neuer Raum")
-            rn = st.text_input("Raum Name", f"Raum {len(my_rooms)+1}")
-            l = st.number_input("Länge", 4.0); b = st.number_input("Breite", 3.0)
-            
-            if st.button("Raum speichern"):
-                save_row("raeume", {
-                    "projekt_id": cur_pid, "name": rn, 
-                    "l": l, "b": b, "x": nw/2, "y": nh/2
-                })
-                st.rerun()
+            # Vorschau
+            k_dat = df_kunden[df_kunden['id']==k_sel].iloc[0]
+            st.info(f"Gewählt: {k_dat['name']} aus {k_dat['ort']}")
 
-        with c2:
-            st.pyplot(plot_installation_map(my_rooms, pd.DataFrame(), pd.DataFrame(), blueprint_img=st.session_state.blueprint, bp_dims=(nw, nh)))
-
-    # --- TAB 2: STROMKREISE ---
-    with t2:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("Neuer Stromkreis")
-            sn = st.text_input("Bezeichnung (z.B. Küche)"); sf = st.selectbox("Sicherung", [10, 16, 32], index=1)
-            sc = st.selectbox("Kabeltyp", [k['name'] for k in PRODUKT_KATALOG['Kabel']]); sl = st.number_input("Länge (ca.)", 15)
+    else: # Neuer Kunde
+        with st.form("new_cust"):
+            st.subheader("1. Neue Stammdaten")
+            c1, c2 = st.columns(2)
+            nn = c1.text_input("Firmenname / Name *")
+            no = c2.text_input("Ort *")
+            ns = c1.text_input("Straße")
+            np = c2.text_input("PLZ")
+            nt = c1.text_input("Telefon"); ne = c2.text_input("Email")
             
-            if st.button("Stromkreis speichern"):
-                pr = next(k['preis'] for k in PRODUKT_KATALOG['Kabel'] if k['name']==sc)
-                sid = f"S{len(my_strings)+1}"
-                save_row("strings", {
-                    "projekt_id": cur_pid, "id": sid, "name": sn, 
-                    "fuse": sf, "factor": 0.7, 
-                    "cable_name": sc, "cable_len": sl, "cable_price": pr
-                })
-                st.rerun()
-        with c2:
-            if not my_strings.empty: 
-                st.subheader("Vorhandene Kreise")
-                st.dataframe(my_strings[['name', 'fuse', 'cable_name', 'cable_len']])
+            if st.form_submit_button("Kunde anlegen"):
+                if nn and no:
+                    kid = f"K-{len(df_kunden)+1:03d}"
+                    ok = save_new_row("kunden", {"id": kid, "name": nn, "strasse": ns, "plz": np, "ort": no, "telefon": nt, "email": ne})
+                    if ok:
+                        st.success(f"Kunde {nn} angelegt! Bitte jetzt unten Projekt starten.")
+                        st.rerun() # Reload damit er in der Liste ist
+                else:
+                    st.error("Name und Ort sind Pflicht.")
 
-    # --- TAB 3: INSTALLATION ---
-    with t3:
-        if my_rooms.empty or my_strings.empty: 
-            st.warning("Bitte erst Räume und Stromkreise anlegen!")
-        else:
-            c1, c2 = st.columns([1, 2])
-            with c1:
-                st.subheader("Gerät platzieren")
-                r_sel = st.selectbox("Raum", my_rooms['name'].unique())
-                s_sel = st.selectbox("Stromkreis", my_strings['id'].unique(), format_func=lambda x: f"{x} ({next((s['name'] for i,s in my_strings.iterrows() if s['id']==x), '?')})")
-                k_sel = st.selectbox("Kategorie", ["Steuerung", "Verbraucher"])
-                i_sel = st.selectbox("Artikel", [p['name'] for p in PRODUKT_KATALOG[k_sel]])
-                
-                if st.button("Hinzufügen"):
-                    pd = next(p for p in PRODUKT_KATALOG[k_sel] if p['name']==i_sel)
-                    # Raum Maße für Default Position holen
-                    t_room = my_rooms[my_rooms['name'] == r_sel].iloc[0]
-                    rx, ry = float(t_room.get('l', 4)), float(t_room.get('b', 3))
-                    
-                    save_row("installation", {
-                        "projekt_id": cur_pid, "raum": r_sel, "string": s_sel, "artikel": i_sel, 
-                        "menge": 1, "preis": pd['preis'], "watt": pd['watt'], 
-                        "pos_x": rx/2, "pos_y": ry/2
+    # Projekt Starten Button (nur sichtbar wenn Kunde da)
+    if not df_kunden.empty:
+        st.divider()
+        st.subheader("2. Projekt initialisieren")
+        # Wenn wir oben einen neuen angelegt haben, nehmen wir den neuesten, sonst den ausgewählten
+        if mode == "Neuen Kunden anlegen":
+            # Wir nehmen den letzten Eintrag aus der DB (der gerade angelegt wurde)
+            # Das ist ein einfacher Hack, sauberer wäre Session State, aber reicht hier
+            last_k = df_kunden.iloc[-1]
+            kunden_id_to_use = last_k['id']
+            st.write(f"Projekt wird erstellt für: **{last_k['name']}**")
+        
+        if kunden_id_to_use:
+            with st.form("start_proj"):
+                pbem = st.text_area("Projekt-Notiz (Optional)")
+                if st.form_submit_button("🚀 Projekt starten"):
+                    pid = f"P-{len(df_projekte_raw)+1:03d}"
+                    save_new_row("projekte", {
+                        "id": pid, "kunden_id": kunden_id_to_use, 
+                        "status": "Neu", "bemerkung": pbem,
+                        "bp_width": 20.0, "bp_height": 15.0, "created_at": "Heute"
                     })
+                    st.success(f"Projekt {pid} erstellt!")
+                    # Wir könnten hier direkt zur Projektansicht springen, aber User muss manuell wählen
+                    st.info("Wechseln Sie nun links zu 'Projekte öffnen'.")
+
+# --- PROJEKT ARBEITSBEREICH ---
+elif nav == "📂 Projekte öffnen":
+    # Sidebar Liste
+    if df_projekte_display.empty:
+        st.warning("Keine Projekte.")
+    else:
+        # Selectbox mit schönem Namen (Müller - P-001)
+        p_sel = st.sidebar.selectbox("Projekt wählen", df_projekte_display['id'].tolist(), 
+                                     format_func=lambda x: f"{df_projekte_display[df_projekte_display['id']==x]['name'].values[0]} ({x})")
+        
+        # Daten holen
+        p_row = df_projekte_display[df_projekte_display['id'] == p_sel].iloc[0]
+        cur_kid = p_row['kunden_id']
+        k_row = df_kunden[df_kunden['id'] == str(cur_kid)].iloc[0] # Kunden Stammdaten
+        
+        # Detail Daten filtern
+        my_rooms = df_rooms[df_rooms['projekt_id'] == p_sel]
+        my_strings = df_strings[df_strings['projekt_id'] == p_sel]
+        my_mats = df_mats[df_mats['projekt_id'] == p_sel]
+        
+        if 'blueprint' not in st.session_state: st.session_state.blueprint = None
+
+        st.title(f"{k_row['name']} | {p_row['status']}")
+        st.caption(f"Projekt: {p_sel} | Kunde: {cur_kid} | Ort: {k_row['ort']}")
+
+        t1, t2, t3, t4 = st.tabs(["👤 Kunde & Infos", "🏗️ Gebäude", "⚡ Planung", "💰 Liste"])
+
+        # TAB 1: STAMMDATEN (Bearbeitet Tabelle 'kunden')
+        with t1:
+            c1, c2 = st.columns(2)
+            with c1:
+                st.subheader("Kunden-Stammdaten")
+                with st.form("edit_k"):
+                    en = st.text_input("Name", k_row['name'])
+                    eo = st.text_input("Ort", k_row['ort'])
+                    et = st.text_input("Tel", k_row['telefon'])
+                    if st.form_submit_button("Kunde speichern"):
+                        update_record("kunden", "id", cur_kid, {"name": en, "ort": eo, "telefon": et})
+                        st.rerun()
+            with c2:
+                st.subheader("Projekt-Infos")
+                with st.form("edit_p"):
+                    estat = st.selectbox("Status", ["Neu", "In Planung", "Fertig"], index=["Neu", "In Planung", "Fertig"].index(p_row['status']) if p_row['status'] in ["Neu", "In Planung", "Fertig"] else 0)
+                    ebem = st.text_area("Notiz", p_row['bemerkung'])
+                    if st.form_submit_button("Projektstatus speichern"):
+                        update_record("projekte", "id", p_sel, {"status": estat, "bemerkung": ebem})
+                        st.rerun()
+
+        # TAB 2: GEBÄUDE
+        with t2:
+            c1, c2 = st.columns([1,2])
+            with c1:
+                up = st.file_uploader("Plan", type=['jpg','png'])
+                if up: st.session_state.blueprint = Image.open(up)
+                
+                cur_w = float(p_row['bp_width']) if pd.notnull(p_row['bp_width']) else 20.0
+                cur_h = float(p_row['bp_height']) if pd.notnull(p_row['bp_height']) else 15.0
+                nw = st.number_input("Breite", value=cur_w)
+                nh = st.number_input("Höhe", value=cur_h)
+                if st.button("Skalierung speichern"):
+                    update_record("projekte", "id", p_sel, {"bp_width": nw, "bp_height": nh})
+                
+                st.divider()
+                rn = st.text_input("Raum Name", "Raum 1")
+                l = st.number_input("Länge", 4.0); b = st.number_input("Breite", 3.0)
+                if st.button("Raum adden"):
+                    save_new_row("raeume", {"projekt_id": p_sel, "name": rn, "l": l, "b": b, "x": nw/2, "y": nh/2})
                     st.rerun()
             with c2:
-                # Hier übergeben wir alle Daten für die volle Karte
-                st.pyplot(plot_installation_map(my_rooms, my_mats, my_strings, blueprint_img=st.session_state.blueprint, bp_dims=(nw, nh)))
+                st.pyplot(plot_map(my_rooms, pd.DataFrame(), pd.DataFrame(), bg_img=st.session_state.blueprint, dims=(nw,nh)))
 
-    # --- TAB 4: LISTE & VERTEILER ---
-    with t4:
-        c1, c2 = st.columns(2)
-        with c1:
-            st.subheader("Material & Kosten")
-            if not my_mats.empty:
-                st.dataframe(my_mats[['raum', 'artikel', 'preis', 'string']])
-                total = (my_mats['menge'] * my_mats['preis']).sum()
-                st.metric("Gesamtsumme (Geräte)", f"{total:.2f} €")
-            else:
-                st.info("Noch keine Geräte verbaut.")
-        with c2:
-            st.subheader("Verteiler Logik")
-            st.graphviz_chart(plot_wiring_tree(my_strings, my_mats))
-else:
-    st.info("Bitte wählen Sie links ein Projekt aus oder erstellen Sie ein neues.")
+        # TAB 3: PLANUNG (Kombiniert Strings & Mats)
+        with t3:
+            c1, c2 = st.columns([1,2])
+            with c1:
+                st.markdown("##### 1. Stromkreis")
+                sn = st.text_input("Name"); sf = st.selectbox("A", [10,16,32], key="sf")
+                if st.button("Kreis +"):
+                    sid=f"S{len(my_strings)+1}"
+                    save_new_row("strings", {"projekt_id": p_sel, "id": sid, "name": sn, "fuse": sf, "factor": 0.7, "cable_name": "NYM-J 3x1.5", "cable_len": 15, "cable_price": 0.65})
+                    st.rerun()
+                
+                st.divider()
+                st.markdown("##### 2. Gerät setzen")
+                if not my_rooms.empty and not my_strings.empty:
+                    rs = st.selectbox("Raum", my_rooms['name'].unique())
+                    ss = st.selectbox("Kreis", my_strings['id'].unique())
+                    ks = st.selectbox("Kat", ["Steuerung", "Verbraucher"])
+                    ils = st.selectbox("Art", [p['name'] for p in PRODUKT_KATALOG[ks]])
+                    if st.button("Platzieren"):
+                        pd_ = next(p for p in PRODUKT_KATALOG[ks] if p['name']==ils)
+                        tr = my_rooms[my_rooms['name']==rs].iloc[0]
+                        save_new_row("installation", {"projekt_id": p_sel, "raum": rs, "string": ss, "artikel": ils, "menge": 1, "preis": pd_['preis'], "watt": pd_['watt'], "pos_x": float(tr['l'])/2, "pos_y": float(tr['b'])/2})
+                        st.rerun()
+            with c2:
+                st.pyplot(plot_map(my_rooms, my_mats, my_strings, bg_img=st.session_state.blueprint, dims=(nw,nh)))
+
+        # TAB 4: LISTE
+        with t4:
+             if not my_mats.empty:
+                 st.dataframe(my_mats[['raum','artikel','menge','preis']])
+                 st.metric("Total", f"{(my_mats['menge']*my_mats['preis']).sum():.2f} €")
